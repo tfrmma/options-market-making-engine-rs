@@ -67,10 +67,6 @@ impl VolSurface {
     /// Total variance at arbitrary (k, t). Flat-extrapolates past the listed
     /// tenors, linearly interpolates in variance between them, which stays
     /// arb-free since it's a convex combination of two non-crossing curves.
-    ///
-    /// TODO: flat extrapolation on the front end is fine for T > 0 but this
-    /// crate doesn't do anything sane for T <= 0 (expired/expiring option).
-    /// Caller is currently responsible for filtering those out before query.
     pub fn total_variance(&self, k: f64, t: f64) -> f64 {
         if t <= self.slices[0].expiry_years {
             return self.slices[0].params.total_variance(k);
@@ -88,7 +84,12 @@ impl VolSurface {
         w_lo + weight * (w_hi - w_lo)
     }
 
+    // expired/expiring: total_variance/t would blow up or divide by <=0, 0.0
+    // is the right answer, an expired option has no remaining implied vol to speak of
     pub fn implied_vol(&self, k: f64, t: f64) -> f64 {
+        if t <= 0.0 {
+            return 0.0;
+        }
         (self.total_variance(k, t) / t).max(0.0).sqrt()
     }
 }
@@ -145,5 +146,20 @@ mod tests {
     #[test]
     fn empty_surface_is_rejected() {
         assert_eq!(VolSurface::build(vec![]).unwrap_err(), SurfaceError::EmptySurface);
+    }
+
+    #[test]
+    fn implied_vol_is_zero_at_and_past_expiry_instead_of_blowing_up() {
+        let s = VolSurface::build(vec![slice(7.0 / 365.0, 0.01), slice(30.0 / 365.0, 0.03)]).unwrap();
+        assert_eq!(s.implied_vol(0.0, 0.0), 0.0);
+        assert_eq!(s.implied_vol(0.0, -1.0), 0.0);
+        assert!(s.implied_vol(0.0, 0.0).is_finite());
+    }
+
+    #[test]
+    fn implied_vol_stays_finite_for_a_very_small_positive_t() {
+        let s = VolSurface::build(vec![slice(7.0 / 365.0, 0.01), slice(30.0 / 365.0, 0.03)]).unwrap();
+        let v = s.implied_vol(0.0, 1e-9);
+        assert!(v.is_finite() && v >= 0.0, "v={v}");
     }
 }
