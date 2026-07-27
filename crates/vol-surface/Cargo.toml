@@ -1,0 +1,8 @@
+[package]
+name = "vol-surface"
+version = "0.1.0"
+edition = "2021"
+description = "Arbitrage-checked raw-SVI implied volatility surface for Deribit options: per-expiry calibration, static (butterfly) and calendar no-arbitrage validation, and interpolated surface queries."
+license = "MIT"
+
+[dependencies]

@@ -1,0 +1,9 @@
+[package]
+name = "book-risk"
+version = "0.1.0"
+edition = "2021"
+description = "Book-level Greeks aggregation for Deribit inverse (coin-settled) options: per-position coin-denominated delta/gamma/vega/theta, aggregated and bucketed by expiry."
+license = "MIT"
+
+[dependencies]
+vol-surface = { path = "../vol-surface" }

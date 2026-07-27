@@ -1,0 +1,9 @@
+[package]
+name = "hedge-orchestrator"
+version = "0.1.0"
+edition = "2021"
+description = "Delta hedging via Deribit's inverse perpetual, plus a cost-benefit gate for hedging naked vega with other options instead of just eating the carry."
+license = "MIT"
+
+[dependencies]
+book-risk = { path = "../book-risk" }

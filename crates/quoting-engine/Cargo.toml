@@ -1,0 +1,10 @@
+[package]
+name = "quoting-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Inventory- and toxicity-aware quoting for a Deribit options book. Runs Avellaneda-Stoikov in implied-vol space instead of price space, skewed per expiry bucket off book-risk's aggregated Greeks, output shaped to drop straight into a Mass Quote request."
+license = "MIT"
+
+[dependencies]
+vol-surface = { path = "../vol-surface" }
+book-risk = { path = "../book-risk" }

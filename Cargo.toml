@@ -1,0 +1,3 @@
+[workspace]
+resolver = "2"
+members = ["crates/vol-surface", "crates/book-risk", "crates/quoting-engine", "crates/hedge-orchestrator"]
