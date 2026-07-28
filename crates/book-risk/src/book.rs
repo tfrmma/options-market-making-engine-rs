@@ -25,6 +25,24 @@ impl AddAssign<InverseGreeks> for BookGreeks {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ForwardMatch {
+    Exact,
+    Interpolated,
+    /// expiry_years fell outside the listed range, flat-extrapolated from
+    /// whichever end was closer. Forward curves have real term structure,
+    /// silently flat-extrapolating an arbitrary distance is a much bigger
+    /// assumption than vol-surface's flat vol extrapolation, so this is
+    /// surfaced instead of hidden, the caller decides whether to trust it.
+    Extrapolated { nearest_listed_expiry_years: f64 },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ForwardLookup {
+    pub forward: f64,
+    pub match_kind: ForwardMatch,
+}
+
 pub struct ForwardCurve {
     expiries: Vec<f64>,
     forwards: Vec<f64>,
@@ -38,16 +56,36 @@ impl ForwardCurve {
         Self { expiries, forwards }
     }
 
-    // TODO: silently returns a stale forward if a synthetic-forward expiry has no listed future nearby.
-    fn forward_for(&self, expiry_years: f64) -> f64 {
-        let idx = self
-            .expiries
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| (**a - expiry_years).abs().partial_cmp(&(**b - expiry_years).abs()).unwrap())
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        self.forwards[idx]
+    pub fn forward_for(&self, expiry_years: f64) -> ForwardLookup {
+        let first = self.expiries[0];
+        let last = *self.expiries.last().unwrap();
+
+        if expiry_years <= first {
+            let forward = self.forwards[0];
+            return if (expiry_years - first).abs() < 1e-9 {
+                ForwardLookup { forward, match_kind: ForwardMatch::Exact }
+            } else {
+                ForwardLookup { forward, match_kind: ForwardMatch::Extrapolated { nearest_listed_expiry_years: first } }
+            };
+        }
+        if expiry_years >= last {
+            let forward = *self.forwards.last().unwrap();
+            return if (expiry_years - last).abs() < 1e-9 {
+                ForwardLookup { forward, match_kind: ForwardMatch::Exact }
+            } else {
+                ForwardLookup { forward, match_kind: ForwardMatch::Extrapolated { nearest_listed_expiry_years: last } }
+            };
+        }
+
+        // strictly between two listed expiries here, find the bracket and interpolate
+        let hi = self.expiries.partition_point(|&e| e < expiry_years);
+        let lo = hi - 1;
+        if (self.expiries[hi] - expiry_years).abs() < 1e-9 {
+            return ForwardLookup { forward: self.forwards[hi], match_kind: ForwardMatch::Exact };
+        }
+        let weight = (expiry_years - self.expiries[lo]) / (self.expiries[hi] - self.expiries[lo]);
+        let forward = self.forwards[lo] + weight * (self.forwards[hi] - self.forwards[lo]);
+        ForwardLookup { forward, match_kind: ForwardMatch::Interpolated }
     }
 }
 
@@ -74,7 +112,7 @@ pub fn aggregate(positions: &[OptionPosition], surface: &VolSurface, forwards: &
     for pos in positions {
         let strike = pos.instrument.strike;
         let t = pos.instrument.expiry_years;
-        let forward = forwards.forward_for(t);
+        let forward = forwards.forward_for(t).forward;
         let log_moneyness = (strike / forward).ln();
         let vol = surface.implied_vol(log_moneyness, t);
 
@@ -136,10 +174,35 @@ mod tests {
     }
 
     #[test]
-    fn forward_curve_picks_nearest_listed_expiry() {
+    fn forward_curve_interpolates_between_listed_expiries() {
         let forwards = ForwardCurve::new(vec![(7.0 / 365.0, 65000.0), (60.0 / 365.0, 70000.0)]);
-        // closer to the 7d bucket than the 60d one
-        assert_eq!(forwards.forward_for(10.0 / 365.0), 65000.0);
-        assert_eq!(forwards.forward_for(55.0 / 365.0), 70000.0);
+        let midpoint_t = (7.0 + 60.0) / 2.0 / 365.0;
+        let lookup = forwards.forward_for(midpoint_t);
+        assert!((lookup.forward - 67500.0).abs() < 1e-6, "forward={}", lookup.forward);
+        assert_eq!(lookup.match_kind, ForwardMatch::Interpolated);
+    }
+
+    #[test]
+    fn forward_curve_reports_exact_matches_as_exact_not_interpolated() {
+        let forwards = ForwardCurve::new(vec![(7.0 / 365.0, 65000.0), (60.0 / 365.0, 70000.0)]);
+        let lookup = forwards.forward_for(60.0 / 365.0);
+        assert_eq!(lookup.forward, 70000.0);
+        assert_eq!(lookup.match_kind, ForwardMatch::Exact);
+    }
+
+    #[test]
+    fn forward_curve_flags_extrapolation_instead_of_hiding_it() {
+        let forwards = ForwardCurve::new(vec![(7.0 / 365.0, 65000.0), (60.0 / 365.0, 70000.0)]);
+        let lookup = forwards.forward_for(365.0 / 365.0); // way past the longest listed future
+        assert_eq!(lookup.forward, 70000.0); // still flat-extrapolates, just doesn't hide that it did
+        assert_eq!(lookup.match_kind, ForwardMatch::Extrapolated { nearest_listed_expiry_years: 60.0 / 365.0 });
+    }
+
+    #[test]
+    fn single_listed_expiry_extrapolates_flat_in_both_directions() {
+        let forwards = ForwardCurve::new(vec![(14.0 / 365.0, 65000.0)]);
+        assert_eq!(forwards.forward_for(7.0 / 365.0).forward, 65000.0);
+        assert_eq!(forwards.forward_for(30.0 / 365.0).forward, 65000.0);
+        assert_eq!(forwards.forward_for(14.0 / 365.0).match_kind, ForwardMatch::Exact);
     }
 }
