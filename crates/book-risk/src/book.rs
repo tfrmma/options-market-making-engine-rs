@@ -89,15 +89,42 @@ impl ForwardCurve {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct StrikeGamma {
+    pub log_moneyness: f64,
+    pub expiry_years: f64,
+    pub gamma: f64,
+}
+
 #[derive(Debug, Default)]
 pub struct BookRisk {
     pub total: BookGreeks,
     pub by_expiry: BTreeMap<u64, BookGreeks>,
+    by_strike: Vec<StrikeGamma>,
 }
 
 impl BookRisk {
     pub fn bucket_near(&self, expiry_years: f64) -> BookGreeks {
         self.by_expiry.get(&bucket_key(expiry_years)).copied().unwrap_or_default()
+    }
+
+    /// Gaussian-kernel-weighted gamma near `target_log_moneyness`, restricted
+    /// to the same expiry bucket as `target_log_moneyness`/`expiry_years`.
+    /// `bandwidth` is in log-moneyness units, smaller = more localized.
+    /// bucket_near() answers "how much gamma in this whole tenor", this
+    /// answers "how much gamma near this specific strike", the two are
+    /// different questions, a strike sitting way out in the wing shouldn't
+    /// get skewed the same as one sitting on top of a concentrated position.
+    pub fn local_gamma_near(&self, target_log_moneyness: f64, expiry_years: f64, bandwidth: f64) -> f64 {
+        let target_bucket = bucket_key(expiry_years);
+        self.by_strike
+            .iter()
+            .filter(|p| bucket_key(p.expiry_years) == target_bucket)
+            .map(|p| {
+                let d = (p.log_moneyness - target_log_moneyness) / bandwidth;
+                (-0.5 * d * d).exp() * p.gamma
+            })
+            .sum()
     }
 }
 
@@ -119,6 +146,7 @@ pub fn aggregate(positions: &[OptionPosition], surface: &VolSurface, forwards: &
         let g = pos.greeks(forward, vol);
         risk.total += g;
         *risk.by_expiry.entry(bucket_key(t)).or_default() += g;
+        risk.by_strike.push(StrikeGamma { log_moneyness, expiry_years: t, gamma: g.gamma });
     }
 
     risk
@@ -138,6 +166,65 @@ mod tests {
             Slice { expiry_years: 60.0 / 365.0, params },
         ])
         .unwrap()
+    }
+
+    #[test]
+    fn local_gamma_weighs_a_nearby_strike_more_than_a_distant_one() {
+        let surface = flat_surface(0.04);
+        let forwards = ForwardCurve::new(vec![(14.0 / 365.0, 65000.0)]);
+        let expiry = 14.0 / 365.0;
+        let near_strike = OptionKey { option_type: OptionType::Call, strike: 65000.0, expiry_years: expiry }; // ATM
+        let far_strike = OptionKey { option_type: OptionType::Call, strike: 90000.0, expiry_years: expiry }; // way OTM
+        let positions = vec![
+            OptionPosition { instrument: near_strike, size: 10.0 },
+            OptionPosition { instrument: far_strike, size: 10.0 },
+        ];
+        let risk = aggregate(&positions, &surface, &forwards);
+
+        let target_k = 0.0; // querying right at the ATM strike's own log-moneyness
+        let local = risk.local_gamma_near(target_k, expiry, 0.1);
+        let near_only_gamma = risk.by_strike.iter().find(|p| (p.log_moneyness).abs() < 1e-9).unwrap().gamma;
+        // with a tight bandwidth, the far strike's contribution should be
+        // negligible, local gamma should sit close to just the near position's gamma
+        assert!((local - near_only_gamma).abs() < near_only_gamma.abs() * 0.05, "local={local} near_only={near_only_gamma}");
+    }
+
+    #[test]
+    fn local_gamma_ignores_positions_in_a_different_expiry_bucket() {
+        let surface = flat_surface(0.04);
+        let forwards = ForwardCurve::new(vec![(7.0 / 365.0, 65000.0), (60.0 / 365.0, 65000.0)]);
+        let short_dated = OptionKey { option_type: OptionType::Call, strike: 65000.0, expiry_years: 7.0 / 365.0 };
+        let long_dated = OptionKey { option_type: OptionType::Call, strike: 65000.0, expiry_years: 60.0 / 365.0 };
+        let positions = vec![
+            OptionPosition { instrument: short_dated, size: 10.0 },
+            OptionPosition { instrument: long_dated, size: 10.0 },
+        ];
+        let risk = aggregate(&positions, &surface, &forwards);
+
+        // same strike, but querying the long-dated bucket, should not pick up
+        // the short-dated position's gamma even though log-moneyness matches exactly
+        let local_long = risk.local_gamma_near(0.0, 60.0 / 365.0, 0.1);
+        let long_only_gamma = risk.by_expiry[&bucket_key(60.0 / 365.0)].gamma;
+        assert!((local_long - long_only_gamma).abs() < 1e-9, "local={local_long} long_only={long_only_gamma}");
+    }
+
+    #[test]
+    fn wider_bandwidth_picks_up_more_of_the_distant_strike() {
+        let surface = flat_surface(0.04);
+        let forwards = ForwardCurve::new(vec![(14.0 / 365.0, 65000.0)]);
+        let expiry = 14.0 / 365.0;
+        let near_strike = OptionKey { option_type: OptionType::Call, strike: 65000.0, expiry_years: expiry };
+        let far_strike = OptionKey { option_type: OptionType::Call, strike: 90000.0, expiry_years: expiry };
+        let positions = vec![
+            OptionPosition { instrument: near_strike, size: 10.0 },
+            OptionPosition { instrument: far_strike, size: 10.0 },
+        ];
+        let risk = aggregate(&positions, &surface, &forwards);
+
+        let tight = risk.local_gamma_near(0.0, expiry, 0.05);
+        let wide = risk.local_gamma_near(0.0, expiry, 2.0);
+        // a wide bandwidth should pull in more of the far strike's gamma than a tight one
+        assert!((wide - tight).abs() > 1e-12, "tight={tight} wide={wide}");
     }
 
     #[test]
