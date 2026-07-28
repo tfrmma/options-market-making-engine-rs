@@ -47,6 +47,21 @@ impl TickSchedule {
     }
 }
 
+/// Not Deribit's bandwidth mechanism (see the module TODO above, that one's
+/// still unmodeled on purpose). This is a plain internal safety net: if a
+/// bug upstream (bad vol, bad forward, whatever) produces a price wildly
+/// off from theoretical, this stops it from going out rather than trusting
+/// Deribit to catch it. `max_deviation` is a fraction, e.g. 0.5 means don't
+/// let the quoted price sit more than 50% away from `theoretical_price`.
+pub fn sanity_clamp(price: f64, theoretical_price: f64, max_deviation: f64) -> f64 {
+    if theoretical_price <= 0.0 {
+        return price;
+    }
+    let lo = theoretical_price * (1.0 - max_deviation);
+    let hi = theoretical_price * (1.0 + max_deviation);
+    price.clamp(lo.max(0.0), hi)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,5 +95,23 @@ mod tests {
         let s = TickSchedule::deribit_btc_option_default();
         assert!((s.round_down(0.0042) - 0.0042).abs() < 1e-12);
         assert!((s.round_up(0.0042) - 0.0042).abs() < 1e-12);
+    }
+
+    #[test]
+    fn sanity_clamp_passes_through_a_reasonable_price() {
+        assert_eq!(sanity_clamp(0.052, 0.05, 0.5), 0.052);
+    }
+
+    #[test]
+    fn sanity_clamp_catches_a_wildly_off_price() {
+        // 10x theoretical, way outside a 50% band
+        let clamped = sanity_clamp(0.5, 0.05, 0.5);
+        assert!((clamped - 0.075).abs() < 1e-12, "clamped={clamped}");
+    }
+
+    #[test]
+    fn sanity_clamp_is_a_noop_when_theoretical_price_is_non_positive() {
+        // no reference to clamp against, pass the price through rather than guess
+        assert_eq!(sanity_clamp(0.5, 0.0, 0.5), 0.5);
     }
 }
