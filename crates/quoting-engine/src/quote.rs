@@ -21,8 +21,12 @@ pub struct QuoteRequest<'a> {
     pub tick_schedule: &'a TickSchedule,
     pub base_size: f64,
     pub min_trade_amount: f64,
-    // TODO: throttle floor isn't tied to a real MMP group's actual vega limit yet, wire that up.
+    // TODO: not tied to a real MMP group's actual vega limit yet, wire that up.
     pub max_bucket_vega: f64,
+    /// size never throttles below this fraction of base_size, MMP is what
+    /// actually pulls quotes under real stress, this is just leaning
+    /// against accumulating more risk before that happens
+    pub size_floor_fraction: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -63,7 +67,7 @@ pub fn build_quote(req: &QuoteRequest) -> Option<QuoteEntry> {
         ask_price = bid_price + req.tick_schedule.tick_for(bid_price);
     }
 
-    let size = quote_size(req.base_size, bucket.vega, req.max_bucket_vega);
+    let size = quote_size(req.base_size, bucket.vega, req.max_bucket_vega, req.size_floor_fraction);
     if size < req.min_trade_amount {
         return None;
     }
@@ -82,12 +86,11 @@ pub fn build_quote(req: &QuoteRequest) -> Option<QuoteEntry> {
 }
 
 // linear throttle toward a floor, never zero, MMP is what actually pulls quotes under real stress
-fn quote_size(base_size: f64, bucket_vega: f64, max_bucket_vega: f64) -> f64 {
+fn quote_size(base_size: f64, bucket_vega: f64, max_bucket_vega: f64, floor_fraction: f64) -> f64 {
     if max_bucket_vega <= 0.0 {
         return base_size;
     }
     let utilization = (bucket_vega.abs() / max_bucket_vega).min(1.0);
-    let floor_fraction = 0.1;
     base_size * (1.0 - utilization * (1.0 - floor_fraction))
 }
 
@@ -122,6 +125,7 @@ mod tests {
             base_size: 10.0,
             min_trade_amount: 0.1,
             max_bucket_vega: 500.0,
+            size_floor_fraction: 0.1,
         }
     }
 
@@ -188,6 +192,26 @@ mod tests {
         let toxic = build_quote(&toxic_req).unwrap();
 
         assert!(toxic.ask_price - toxic.bid_price > calm.ask_price - calm.bid_price);
+    }
+
+    #[test]
+    fn size_floor_fraction_actually_changes_the_throttled_size() {
+        let surface = flat_surface();
+        let instrument = OptionKey { option_type: OptionType::Call, strike: 65000.0, expiry_years: 14.0 / 365.0 };
+        let positions = vec![OptionPosition { instrument, size: 500.0 }]; // pin bucket vega at full utilization
+        let forwards = book_risk::ForwardCurve::new(vec![(14.0 / 365.0, 65000.0)]);
+        let loaded_book = aggregate(&positions, &surface, &forwards);
+        let tick_schedule = TickSchedule::deribit_btc_option_default();
+
+        let mut low_floor = base_request(&loaded_book, &tick_schedule);
+        low_floor.size_floor_fraction = 0.05;
+        let mut high_floor = base_request(&loaded_book, &tick_schedule);
+        high_floor.size_floor_fraction = 0.5;
+        high_floor.min_trade_amount = 0.0; // both should still clear min_trade_amount either way
+
+        let low = build_quote(&low_floor).unwrap();
+        let high = build_quote(&high_floor).unwrap();
+        assert!(high.bid_size > low.bid_size, "higher floor fraction should leave more size at full utilization");
     }
 
     #[test]
