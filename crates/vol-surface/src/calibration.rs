@@ -153,35 +153,58 @@ fn jitter(seed: u64, scale: f64) -> f64 {
     ((x as f64 / u64::MAX as f64) * 2.0 - 1.0) * scale
 }
 
-fn perturb(base: RawSviParams, seed: u64) -> RawSviParams {
-    RawSviParams {
-        a: base.a + jitter(seed * 5 + 1, base.a.abs().max(0.01) * 0.6),
-        b: (base.b * (1.0 + jitter(seed * 5 + 2, 0.6))).max(1e-4),
-        rho: (base.rho + jitter(seed * 5 + 3, 0.4)).clamp(-0.9, 0.9),
-        m: base.m + jitter(seed * 5 + 4, 0.3),
-        sigma: (base.sigma * (1.0 + jitter(seed * 5 + 5, 0.6))).max(1e-4),
+#[derive(Debug, Clone, Copy)]
+pub struct PerturbationScale {
+    pub a: f64,
+    pub b: f64,
+    pub rho: f64,
+    pub m: f64,
+    pub sigma: f64,
+}
+
+impl Default for PerturbationScale {
+    // magnitudes this crate used before they were exposed as config, tuned by
+    // feel against the synthetic-smile tests, not calibrated against real data
+    fn default() -> Self {
+        Self { a: 0.6, b: 0.6, rho: 0.4, m: 0.3, sigma: 0.6 }
     }
 }
 
-/// Multi-start version of calibrate_slice: runs from the caller's guess, a
-/// generic crypto-vol anchor (hedges against a systematically bad guess,
-/// not just a noisy one), and jittered variants of both, keeps whichever
-/// converged to the lowest SSE. Costs n_starts x the single-start runtime,
-/// use calibrate_slice directly on the hot warm-start path where the prior
-/// tick's params are already a good seed.
+fn perturb(base: RawSviParams, seed: u64, scale: &PerturbationScale) -> RawSviParams {
+    RawSviParams {
+        a: base.a + jitter(seed * 5 + 1, base.a.abs().max(0.01) * scale.a),
+        b: (base.b * (1.0 + jitter(seed * 5 + 2, scale.b))).max(1e-4),
+        rho: (base.rho + jitter(seed * 5 + 3, scale.rho)).clamp(-0.9, 0.9),
+        m: base.m + jitter(seed * 5 + 4, scale.m),
+        sigma: (base.sigma * (1.0 + jitter(seed * 5 + 5, scale.sigma))).max(1e-4),
+    }
+}
+
+// fallback multi-start anchor when there's no better reason to prefer any
+// other one, a modest crypto-typical ATM smile, not a universal default
+pub const CRYPTO_GENERIC_ANCHOR: RawSviParams = RawSviParams { a: 0.04, b: 0.2, rho: -0.3, m: 0.0, sigma: 0.4 };
+
+/// Multi-start version of calibrate_slice: runs from the caller's guess,
+/// `generic_anchor` (hedges against a systematically bad guess, not just a
+/// noisy one, pass CRYPTO_GENERIC_ANCHOR if you don't have a better one),
+/// and jittered variants of both, keeps whichever converged to the lowest
+/// SSE. Costs n_starts x the single-start runtime, use calibrate_slice
+/// directly on the hot warm-start path where the prior tick's params are
+/// already a good seed.
 pub fn calibrate_slice_robust(
     quotes: &[VarianceQuote],
     initial_guess: RawSviParams,
     config: CalibrationConfig,
     n_starts: usize,
+    generic_anchor: RawSviParams,
+    perturbation_scale: PerturbationScale,
 ) -> Result<RawSviParams, CalibrationError> {
-    let generic_anchor = RawSviParams { a: 0.04, b: 0.2, rho: -0.3, m: 0.0, sigma: 0.4 };
     let bases = [initial_guess, generic_anchor];
 
     let mut best: Option<(f64, RawSviParams)> = None;
     for start_idx in 0..n_starts.max(1) {
         let base = bases[start_idx % bases.len()];
-        let guess = if start_idx < bases.len() { base } else { perturb(base, start_idx as u64) };
+        let guess = if start_idx < bases.len() { base } else { perturb(base, start_idx as u64, &perturbation_scale) };
         if let Ok(params) = calibrate_slice(quotes, guess, config) {
             let score = objective(&from_constrained(&params), quotes);
             if best.as_ref().map_or(true, |(s, _)| score < *s) {
@@ -233,7 +256,7 @@ mod tests {
             .collect();
 
         let decent_guess = RawSviParams { a: 0.03, b: 0.15, rho: -0.2, m: 0.0, sigma: 0.2 };
-        let fitted = calibrate_slice_robust(&quotes, decent_guess, CalibrationConfig::default(), 6).unwrap();
+        let fitted = calibrate_slice_robust(&quotes, decent_guess, CalibrationConfig::default(), 6, CRYPTO_GENERIC_ANCHOR, PerturbationScale::default()).unwrap();
         for &k in &strikes_k {
             assert!((fitted.total_variance(k) - true_params.total_variance(k)).abs() < 1e-4);
         }
@@ -254,7 +277,7 @@ mod tests {
         let bad_guess = RawSviParams { a: 0.08, b: 0.02, rho: 0.6, m: -0.5, sigma: 0.9 };
 
         let single = calibrate_slice(&quotes, bad_guess, CalibrationConfig::default());
-        let robust = calibrate_slice_robust(&quotes, bad_guess, CalibrationConfig::default(), 8).unwrap();
+        let robust = calibrate_slice_robust(&quotes, bad_guess, CalibrationConfig::default(), 8, CRYPTO_GENERIC_ANCHOR, PerturbationScale::default()).unwrap();
 
         let robust_sse: f64 = strikes_k.iter().map(|&k| (robust.total_variance(k) - true_params.total_variance(k)).powi(2)).sum();
 
@@ -272,7 +295,7 @@ mod tests {
     fn robust_calibration_fails_cleanly_when_every_start_fails() {
         let quotes = vec![VarianceQuote { log_moneyness: 0.0, total_variance: 0.02, weight: 1.0 }]; // too few points
         let guess = RawSviParams { a: 0.02, b: 0.2, rho: 0.0, m: 0.0, sigma: 0.15 };
-        assert!(calibrate_slice_robust(&quotes, guess, CalibrationConfig::default(), 4).is_err());
+        assert!(calibrate_slice_robust(&quotes, guess, CalibrationConfig::default(), 4, CRYPTO_GENERIC_ANCHOR, PerturbationScale::default()).is_err());
     }
 
     #[test]
