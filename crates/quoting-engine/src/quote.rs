@@ -5,7 +5,7 @@ use book_risk::{price_coin, BookRisk, OptionType};
 
 use crate::reservation::{reservation_vol, RiskAversion};
 use crate::spread::{half_spread_vol, widen_for_toxicity, SpreadParams};
-use crate::tick::TickSchedule;
+use crate::tick::{sanity_clamp, TickSchedule};
 
 pub struct QuoteRequest<'a> {
     pub option_type: OptionType,
@@ -21,12 +21,17 @@ pub struct QuoteRequest<'a> {
     pub tick_schedule: &'a TickSchedule,
     pub base_size: f64,
     pub min_trade_amount: f64,
-    // TODO: not tied to a real MMP group's actual vega limit yet, wire that up.
+    /// caller's job to keep this in sync with the account's actual MMP vega
+    /// limit, this crate has no path to Deribit's authenticated API to fetch it itself
     pub max_bucket_vega: f64,
     /// size never throttles below this fraction of base_size, MMP is what
     /// actually pulls quotes under real stress, this is just leaning
     /// against accumulating more risk before that happens
     pub size_floor_fraction: f64,
+    /// log-moneyness bandwidth for the gamma-skew kernel, smaller = more localized to this strike
+    pub gamma_kernel_bandwidth: f64,
+    /// safety net, not Deribit's bandwidth mechanism, see tick::sanity_clamp
+    pub max_price_deviation: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -50,7 +55,9 @@ pub fn build_quote(req: &QuoteRequest) -> Option<QuoteEntry> {
     }
 
     let bucket = req.book.bucket_near(req.expiry_years);
-    let r_vol = reservation_vol(req.mid_vol, &bucket, req.risk_aversion);
+    let target_k = (req.strike / req.forward).ln();
+    let local_gamma = req.book.local_gamma_near(target_k, req.expiry_years, req.gamma_kernel_bandwidth);
+    let r_vol = reservation_vol(req.mid_vol, bucket.vega, local_gamma, req.risk_aversion);
     let half = widen_for_toxicity(half_spread_vol(&req.spread_params), req.toxicity_score, req.toxicity_widen_factor);
 
     let bid_vol = (r_vol - half).max(1e-4);
@@ -58,6 +65,9 @@ pub fn build_quote(req: &QuoteRequest) -> Option<QuoteEntry> {
 
     let bid_price_raw = price_coin(req.option_type, req.forward, req.strike, bid_vol, req.expiry_years);
     let ask_price_raw = price_coin(req.option_type, req.forward, req.strike, ask_vol, req.expiry_years);
+    let theoretical_price = price_coin(req.option_type, req.forward, req.strike, req.mid_vol, req.expiry_years);
+    let bid_price_raw = sanity_clamp(bid_price_raw, theoretical_price, req.max_price_deviation);
+    let ask_price_raw = sanity_clamp(ask_price_raw, theoretical_price, req.max_price_deviation);
 
     let bid_price = req.tick_schedule.round_down(bid_price_raw);
     let mut ask_price = req.tick_schedule.round_up(ask_price_raw);
@@ -126,6 +136,8 @@ mod tests {
             min_trade_amount: 0.1,
             max_bucket_vega: 500.0,
             size_floor_fraction: 0.1,
+            gamma_kernel_bandwidth: 0.1,
+            max_price_deviation: 0.5,
         }
     }
 
@@ -212,6 +224,45 @@ mod tests {
         let low = build_quote(&low_floor).unwrap();
         let high = build_quote(&high_floor).unwrap();
         assert!(high.bid_size > low.bid_size, "higher floor fraction should leave more size at full utilization");
+    }
+
+    #[test]
+    fn a_strike_near_a_concentrated_position_skews_more_than_a_distant_one() {
+        let surface = flat_surface();
+        let tick_schedule = TickSchedule::deribit_btc_option_default();
+        let expiry = 14.0 / 365.0;
+        // big gamma sitting right at 65000, book is flat everywhere else in this bucket
+        let concentrated = OptionKey { option_type: OptionType::Call, strike: 65000.0, expiry_years: expiry };
+        let positions = vec![OptionPosition { instrument: concentrated, size: 300.0 }];
+        let forwards = book_risk::ForwardCurve::new(vec![(expiry, 65000.0)]);
+        let book = aggregate(&positions, &surface, &forwards);
+
+        let mut near_req = base_request(&book, &tick_schedule);
+        near_req.strike = 65000.0; // right on top of the concentrated position
+        let mut far_req = base_request(&book, &tick_schedule);
+        far_req.strike = 90000.0; // same bucket, far away in log-moneyness
+
+        let near_quote = build_quote(&near_req).unwrap();
+        let far_quote = build_quote(&far_req).unwrap();
+
+        let near_skew = (near_quote.bid_vol + near_quote.ask_vol) / 2.0 - near_req.mid_vol;
+        let far_skew = (far_quote.bid_vol + far_quote.ask_vol) / 2.0 - far_req.mid_vol;
+        assert!(near_skew.abs() > far_skew.abs(), "near_skew={near_skew} far_skew={far_skew}");
+    }
+
+    #[test]
+    fn extreme_spread_params_still_produce_a_price_within_the_sanity_clamp() {
+        let book = BookRisk::default();
+        let tick_schedule = TickSchedule::deribit_btc_option_default();
+        let mut req = base_request(&book, &tick_schedule);
+        // absurdly wide spread params, without the clamp this could quote a
+        // price many multiples away from the mid-vol theoretical
+        req.spread_params = SpreadParams { risk_aversion: 5.0, vol_of_vol: 50.0, horizon_years: 5.0, kappa: 0.001 };
+        req.max_price_deviation = 0.3;
+
+        let theoretical = book_risk::price_coin(req.option_type, req.forward, req.strike, req.mid_vol, req.expiry_years);
+        let quote = build_quote(&req).unwrap();
+        assert!(quote.ask_price <= theoretical * 1.3 + tick_schedule.tick_for(quote.ask_price));
     }
 
     #[test]
