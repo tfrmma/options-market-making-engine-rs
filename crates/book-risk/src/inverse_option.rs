@@ -48,8 +48,8 @@ pub struct InverseGreeks {
     pub gamma: f64,
     /// per 1.0 change in sigma (i.e. per 100 vol points), divide by 100 for per-point.
     pub vega: f64,
-    /// d(price)/d(calendar time), negative for a long option. Finite-differenced,
-    /// see theta_finite_difference below for why.
+    /// d(price)/d(calendar time), negative for a long option. Closed-form,
+    /// see greeks() below.
     pub theta: f64,
 }
 
@@ -75,10 +75,14 @@ pub fn price_coin(option_type: OptionType, forward: f64, strike: f64, vol: f64, 
     }
 }
 
-/// Delta/gamma/vega are closed-form (this sits on the hot path, recomputed
-/// on every relevant book update). Theta is finite-differenced instead of
-/// derived closed-form, see theta_finite_difference for why that's an
-/// acceptable tradeoff here and not just laziness.
+/// All four Greeks are closed-form now. Theta derivation: coin_call =
+/// N(d1) - (K/F)N(d2), differentiate w.r.t. T holding F/K/vol fixed (the
+/// standard Greek convention), the same n(d1) = (K/F)n(d2) identity used
+/// for delta/gamma kills the A = ln(F/K) terms and leaves
+/// d(coin_call)/dT = (K/F)*n(d2)*vol / (2*sqrt(T)). Repeating it for the put
+/// gives the identical expression, which has to be true since call - put =
+/// 1 - K/F doesn't depend on T at all, so their T-derivatives must match,
+/// that parity check is what this was validated against before trusting it.
 pub fn greeks(option_type: OptionType, forward: f64, strike: f64, vol: f64, t: f64) -> InverseGreeks {
     let price_coin_now = price_coin(option_type, forward, strike, vol, t);
 
@@ -102,29 +106,11 @@ pub fn greeks(option_type: OptionType, forward: f64, strike: f64, vol: f64, t: f
         ),
     };
 
-    // Same closed form for calls and puts, standard vega/put-call-parity
-    // result carries over here too (parity's RHS, 1 - K/F, doesn't depend
-    // on sigma, so d(call)/dsigma = d(put)/dsigma).
+    // same closed form for calls and puts, same put-call-parity reasoning as vega
     let vega = (strike / forward) * norm_pdf(d2) * sqrt_t;
-
-    let theta = theta_finite_difference(option_type, forward, strike, vol, t);
+    let theta = -(strike / forward) * norm_pdf(d2) * vol / (2.0 * sqrt_t);
 
     InverseGreeks { price_coin: price_coin_now, delta, gamma, vega, theta }
-}
-
-// Deriving closed-form theta for this quanto-flavored payoff by hand and
-// trusting it without a second implementation to check it against felt
-// like the wrong tradeoff for a first cut. Theta also isn't hedged tick by
-// tick the way delta is, book-risk only needs to recompute it on periodic
-// risk snapshots, so the extra reprice call here is cheap where it's
-// actually paid. TODO: derive and cross-check the closed form if theta
-// ever ends up needing to run on the same hot path as delta/gamma.
-fn theta_finite_difference(option_type: OptionType, forward: f64, strike: f64, vol: f64, t: f64) -> f64 {
-    let dt = 1.0 / (365.0 * 24.0); // one hour of calendar time
-    let t_minus = (t - dt).max(1e-9);
-    let p_now = price_coin(option_type, forward, strike, vol, t);
-    let p_later = price_coin(option_type, forward, strike, vol, t_minus);
-    (p_later - p_now) / dt
 }
 
 #[cfg(test)]
@@ -151,6 +137,13 @@ mod tests {
         let up = price_coin(option_type, forward, strike, vol + eps, t);
         let down = price_coin(option_type, forward, strike, vol - eps, t);
         (up - down) / (2.0 * eps)
+    }
+
+    fn fd_theta(option_type: OptionType, forward: f64, strike: f64, vol: f64, t: f64) -> f64 {
+        let eps = t * 1e-6;
+        let up = price_coin(option_type, forward, strike, vol, t + eps); // theta = -dV/dT
+        let down = price_coin(option_type, forward, strike, vol, t - eps);
+        -(up - down) / (2.0 * eps)
     }
 
     #[test]
@@ -206,6 +199,32 @@ mod tests {
         let forward = 65000.0;
         let d = greeks(OptionType::Call, forward, forward, 0.6, 30.0 / 365.0).delta;
         assert!(d > 0.0 && d < 1.0 / forward, "coin delta {d} should be well under 1/F");
+    }
+
+    #[test]
+    fn analytic_theta_matches_finite_difference() {
+        for option_type in [OptionType::Call, OptionType::Put] {
+            let (forward, strike, vol, t) = (65000.0, 68000.0, 0.6, 30.0 / 365.0);
+            let analytic = greeks(option_type, forward, strike, vol, t).theta;
+            let fd = fd_theta(option_type, forward, strike, vol, t);
+            let rel_diff = (analytic - fd).abs() / fd.abs().max(1e-12);
+            assert!(rel_diff < 1e-4, "{option_type:?} analytic={analytic} fd={fd}");
+        }
+    }
+
+    #[test]
+    fn theta_is_negative_for_a_long_option() {
+        let theta = greeks(OptionType::Call, 65000.0, 65000.0, 0.6, 14.0 / 365.0).theta;
+        assert!(theta < 0.0, "long option should decay in value as T shrinks, got {theta}");
+    }
+
+    #[test]
+    fn call_and_put_theta_are_equal() {
+        // same reasoning as vega: C - P = 1 - K/F doesn't depend on T
+        let (forward, strike, vol, t) = (65000.0, 62000.0, 0.7, 45.0 / 365.0);
+        let call_theta = greeks(OptionType::Call, forward, strike, vol, t).theta;
+        let put_theta = greeks(OptionType::Put, forward, strike, vol, t).theta;
+        assert!((call_theta - put_theta).abs() < 1e-10);
     }
 
     #[test]
