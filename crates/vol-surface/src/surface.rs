@@ -22,17 +22,19 @@ pub struct VolSurface {
     slices: Vec<Slice>, // sorted ascending by expiry_years
 }
 
-// grid used for the calendar no-arb scan below, wide enough to catch
-// crossings in the wings without being absurdly slow
-const K_GRID_MIN: f64 = -2.0;
-const K_GRID_MAX: f64 = 2.0;
-const K_GRID_N: usize = 81;
-
 impl VolSurface {
-    /// Validates each slice individually, then checks that total variance is
-    /// non-decreasing in T at every point on the log-moneyness grid between
-    /// every consecutive pair of expiries (Gatheral & Jacquier 2014, sec. 4).
-    pub fn build(mut slices: Vec<Slice>) -> Result<Self, SurfaceError> {
+    /// Default k-grid: -2..2 in 81 steps, wide enough to catch wing
+    /// crossings without being slow. Use build_with_grid to override for
+    /// unusually wide/narrow strike ranges.
+    pub fn build(slices: Vec<Slice>) -> Result<Self, SurfaceError> {
+        Self::build_with_grid(slices, -2.0, 2.0, 81)
+    }
+
+    /// Validates each slice individually (static no-arb + butterfly, both
+    /// scanned over the same k-grid), then checks that total variance is
+    /// non-decreasing in T at every grid point between every consecutive
+    /// pair of expiries (Gatheral & Jacquier 2014, sec. 4).
+    pub fn build_with_grid(mut slices: Vec<Slice>, k_grid_min: f64, k_grid_max: f64, k_grid_n: usize) -> Result<Self, SurfaceError> {
         if slices.is_empty() {
             return Err(SurfaceError::EmptySurface);
         }
@@ -40,15 +42,16 @@ impl VolSurface {
 
         for (i, s) in slices.iter().enumerate() {
             s.params.validate_static().map_err(SurfaceError::SliceInvalid)?;
+            s.params.check_butterfly_arbitrage(k_grid_min, k_grid_max, k_grid_n).map_err(SurfaceError::SliceInvalid)?;
             if i > 0 && slices[i - 1].expiry_years >= s.expiry_years {
                 return Err(SurfaceError::UnsortedExpiries);
             }
         }
 
-        let step = (K_GRID_MAX - K_GRID_MIN) / (K_GRID_N as f64 - 1.0);
+        let step = (k_grid_max - k_grid_min) / (k_grid_n as f64 - 1.0);
         for i in 1..slices.len() {
-            for j in 0..K_GRID_N {
-                let k = K_GRID_MIN + step * j as f64;
+            for j in 0..k_grid_n {
+                let k = k_grid_min + step * j as f64;
                 let w_short = slices[i - 1].params.total_variance(k);
                 let w_long = slices[i].params.total_variance(k);
                 if w_long < w_short - 1e-9 {
@@ -133,6 +136,27 @@ mod tests {
         let bad = Slice { expiry_years: 7.0 / 365.0, params: RawSviParams { a: 0.0, b: -1.0, rho: 0.0, m: 0.0, sigma: 0.1 } };
         let result = VolSurface::build(vec![bad, slice(30.0 / 365.0, 0.03)]);
         assert!(matches!(result, Err(SurfaceError::SliceInvalid(_))));
+    }
+
+    #[test]
+    fn build_rejects_a_slice_with_butterfly_arbitrage() {
+        // same params svi::tests uses to trigger check_butterfly_arbitrage directly,
+        // build() needs to actually call it, not just have it sitting unused
+        let arb_slice = Slice {
+            expiry_years: 7.0 / 365.0,
+            params: RawSviParams { a: 0.0001, b: 5.0, rho: 0.0, m: 0.0, sigma: 0.01 },
+        };
+        let result = VolSurface::build(vec![arb_slice]);
+        assert!(
+            matches!(result, Err(SurfaceError::SliceInvalid(SviValidationError::ButterflyArbitrage))),
+            "expected ButterflyArbitrage, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn custom_grid_can_be_narrower_than_the_default() {
+        let s = VolSurface::build_with_grid(vec![slice(7.0 / 365.0, 0.01), slice(30.0 / 365.0, 0.03)], -0.5, 0.5, 21);
+        assert!(s.is_ok());
     }
 
     #[test]
