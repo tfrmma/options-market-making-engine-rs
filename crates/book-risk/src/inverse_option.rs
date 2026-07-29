@@ -51,6 +51,10 @@ pub struct InverseGreeks {
     /// d(price)/d(calendar time), negative for a long option. Closed-form,
     /// see greeks() below.
     pub theta: f64,
+    /// d(delta)/d(vol), equivalently d(vega)/dF, both derivations cross-checked below.
+    pub vanna: f64,
+    /// d(vega)/d(vol).
+    pub volga: f64,
 }
 
 fn d1_d2(forward: f64, strike: f64, vol: f64, t: f64) -> (f64, f64) {
@@ -75,14 +79,27 @@ pub fn price_coin(option_type: OptionType, forward: f64, strike: f64, vol: f64, 
     }
 }
 
-/// All four Greeks are closed-form now. Theta derivation: coin_call =
-/// N(d1) - (K/F)N(d2), differentiate w.r.t. T holding F/K/vol fixed (the
-/// standard Greek convention), the same n(d1) = (K/F)n(d2) identity used
-/// for delta/gamma kills the A = ln(F/K) terms and leaves
-/// d(coin_call)/dT = (K/F)*n(d2)*vol / (2*sqrt(T)). Repeating it for the put
-/// gives the identical expression, which has to be true since call - put =
-/// 1 - K/F doesn't depend on T at all, so their T-derivatives must match,
-/// that parity check is what this was validated against before trusting it.
+/// All Greeks are closed-form. Theta derivation: coin_call = N(d1) -
+/// (K/F)N(d2), differentiate w.r.t. T holding F/K/vol fixed (the standard
+/// Greek convention), the same n(d1) = (K/F)n(d2) identity used for
+/// delta/gamma kills the A = ln(F/K) terms and leaves d(coin_call)/dT =
+/// (K/F)*n(d2)*vol / (2*sqrt(T)). Repeating it for the put gives the
+/// identical expression, which has to be true since call - put = 1 - K/F
+/// doesn't depend on T at all, so their T-derivatives must match, that
+/// parity check is what this was validated against before trusting it.
+///
+/// Vanna derived two independent ways (had to agree before this got
+/// trusted): d(vega)/dF starting from vega = (K/F)*n(d2)*sqrt(T), and
+/// d(delta)/dvol starting from delta = (K/F^2)*N(d2), using the standard
+/// identity d(d2)/dvol = -d1/vol. Both collapse to the same closed form:
+/// vanna = -(K/F^2) * n(d2) * d1 / vol. Same call/put value again, same
+/// parity argument as vega (delta_call - delta_put = K/F^2 doesn't depend
+/// on vol either).
+///
+/// Volga = d(vega)/dvol works out to vega * d1 * d2 / vol, which matches
+/// the standard textbook Black-Scholes volga identity structurally (Haug's
+/// formula collection has the same vega*d1*d2/sigma form), a useful
+/// external check beyond just the finite-difference tests below.
 pub fn greeks(option_type: OptionType, forward: f64, strike: f64, vol: f64, t: f64) -> InverseGreeks {
     let price_coin_now = price_coin(option_type, forward, strike, vol, t);
 
@@ -90,7 +107,7 @@ pub fn greeks(option_type: OptionType, forward: f64, strike: f64, vol: f64, t: f
         return InverseGreeks { price_coin: price_coin_now, ..Default::default() };
     }
 
-    let (_, d2) = d1_d2(forward, strike, vol, t);
+    let (d1, d2) = d1_d2(forward, strike, vol, t);
     let sqrt_t = t.sqrt();
     let k_over_f2 = strike / (forward * forward);
     let k_over_f3 = strike / (forward * forward * forward);
@@ -109,8 +126,10 @@ pub fn greeks(option_type: OptionType, forward: f64, strike: f64, vol: f64, t: f
     // same closed form for calls and puts, same put-call-parity reasoning as vega
     let vega = (strike / forward) * norm_pdf(d2) * sqrt_t;
     let theta = -(strike / forward) * norm_pdf(d2) * vol / (2.0 * sqrt_t);
+    let vanna = -k_over_f2 * norm_pdf(d2) * d1 / vol;
+    let volga = vega * d1 * d2 / vol;
 
-    InverseGreeks { price_coin: price_coin_now, delta, gamma, vega, theta }
+    InverseGreeks { price_coin: price_coin_now, delta, gamma, vega, theta, vanna, volga }
 }
 
 #[cfg(test)]
@@ -144,6 +163,29 @@ mod tests {
         let up = price_coin(option_type, forward, strike, vol, t + eps); // theta = -dV/dT
         let down = price_coin(option_type, forward, strike, vol, t - eps);
         -(up - down) / (2.0 * eps)
+    }
+
+    // vanna two independent ways: d(delta)/dvol and d(vega)/dF, both should
+    // land on the same number if the closed form is right
+    fn fd_vanna_via_delta(option_type: OptionType, forward: f64, strike: f64, vol: f64, t: f64) -> f64 {
+        let eps = 1e-6;
+        let up = greeks(option_type, forward, strike, vol + eps, t).delta;
+        let down = greeks(option_type, forward, strike, vol - eps, t).delta;
+        (up - down) / (2.0 * eps)
+    }
+
+    fn fd_vanna_via_vega(option_type: OptionType, forward: f64, strike: f64, vol: f64, t: f64) -> f64 {
+        let eps = forward * 1e-6;
+        let up = greeks(option_type, forward + eps, strike, vol, t).vega;
+        let down = greeks(option_type, forward - eps, strike, vol, t).vega;
+        (up - down) / (2.0 * eps)
+    }
+
+    fn fd_volga(option_type: OptionType, forward: f64, strike: f64, vol: f64, t: f64) -> f64 {
+        let eps = 1e-6;
+        let up = greeks(option_type, forward, strike, vol + eps, t).vega;
+        let down = greeks(option_type, forward, strike, vol - eps, t).vega;
+        (up - down) / (2.0 * eps)
     }
 
     #[test]
@@ -225,6 +267,47 @@ mod tests {
         let call_theta = greeks(OptionType::Call, forward, strike, vol, t).theta;
         let put_theta = greeks(OptionType::Put, forward, strike, vol, t).theta;
         assert!((call_theta - put_theta).abs() < 1e-10);
+    }
+
+    #[test]
+    fn vanna_matches_finite_difference_both_ways() {
+        for option_type in [OptionType::Call, OptionType::Put] {
+            let (forward, strike, vol, t) = (65000.0, 68000.0, 0.6, 30.0 / 365.0);
+            let analytic = greeks(option_type, forward, strike, vol, t).vanna;
+            let via_delta = fd_vanna_via_delta(option_type, forward, strike, vol, t);
+            let via_vega = fd_vanna_via_vega(option_type, forward, strike, vol, t);
+            assert!((analytic - via_delta).abs() / via_delta.abs().max(1e-12) < 1e-4, "{option_type:?} analytic={analytic} via_delta={via_delta}");
+            assert!((analytic - via_vega).abs() / via_vega.abs().max(1e-12) < 1e-4, "{option_type:?} analytic={analytic} via_vega={via_vega}");
+        }
+    }
+
+    #[test]
+    fn volga_matches_finite_difference() {
+        for option_type in [OptionType::Call, OptionType::Put] {
+            let (forward, strike, vol, t) = (65000.0, 68000.0, 0.6, 30.0 / 365.0);
+            let analytic = greeks(option_type, forward, strike, vol, t).volga;
+            let fd = fd_volga(option_type, forward, strike, vol, t);
+            let rel_diff = (analytic - fd).abs() / fd.abs().max(1e-12);
+            assert!(rel_diff < 1e-4, "{option_type:?} analytic={analytic} fd={fd}");
+        }
+    }
+
+    #[test]
+    fn call_and_put_vanna_and_volga_are_equal() {
+        // delta_call - delta_put = K/F^2 doesn't depend on vol, and vega is
+        // already equal for both, so both cross-greeks inherit the same parity
+        let (forward, strike, vol, t) = (65000.0, 62000.0, 0.7, 45.0 / 365.0);
+        let call = greeks(OptionType::Call, forward, strike, vol, t);
+        let put = greeks(OptionType::Put, forward, strike, vol, t);
+        assert!((call.vanna - put.vanna).abs() < 1e-10);
+        assert!((call.volga - put.volga).abs() < 1e-10);
+    }
+
+    #[test]
+    fn vanna_and_volga_are_zero_at_or_past_expiry() {
+        let g = greeks(OptionType::Call, 65000.0, 65000.0, 0.6, 0.0);
+        assert_eq!(g.vanna, 0.0);
+        assert_eq!(g.volga, 0.0);
     }
 
     #[test]
