@@ -3,8 +3,13 @@
 //
 // TODO: rate and cap fraction aren't hardcoded, public sources disagree
 // with each other (rate 0.03-0.04%, cap 12.5-20%, likely stale articles
-// plus fee-tier differences), a desk running this should read its actual
-// fee tier off the account API instead. Mechanism modeled, numbers are config.
+// plus fee-tier differences). This is correctly caller-supplied config, not
+// a code gap, the actual gap is a production-wiring one: something needs to
+// call Deribit's authenticated account API periodically and refresh this,
+// which needs an HTTP client, request signing, and credential handling this
+// pure-computation crate deliberately doesn't pull in.
+
+use book_risk::OptionType;
 
 #[derive(Debug, Clone, Copy)]
 pub struct OptionFeeSchedule {
@@ -45,8 +50,72 @@ fn hedge_cost(
     spread_cost + fee_cost
 }
 
-// TODO: this is a hedge-or-don't threshold, not strike/tenor selection,
-// caller decides which option to hedge with.
+/// One option this crate could hedge naked vega with. Caller supplies the
+/// candidate list (from their own instrument/order-book snapshot), this
+/// crate doesn't have a route to Deribit's instrument list itself. Scoped
+/// to same-bucket candidates for now, picking a different-expiry option
+/// introduces calendar/basis risk that isn't modeled here.
+#[derive(Debug, Clone, Copy)]
+pub struct VegaHedgeCandidate {
+    pub option_type: OptionType,
+    pub strike: f64,
+    pub price_coin: f64,
+    pub vega_per_contract: f64,
+    pub half_spread_vol: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct VegaHedgeSelection {
+    pub candidate_index: usize,
+    pub hedge_size_contracts: f64,
+    pub decision: VegaHedgeDecision,
+}
+
+/// Sizes each candidate to exactly zero out vega_exposure_coin, evaluates
+/// the cost-benefit for each, and picks whichever clears the bar at the
+/// lowest hedge cost per unit of vega neutralized. None if nothing clears
+/// it, or every candidate has ~zero vega and can't hedge anything.
+pub fn select_vega_hedge(
+    vega_exposure_coin: f64,
+    vol_of_vol: f64,
+    horizon_years: f64,
+    risk_aversion: f64,
+    contract_size_coin: f64,
+    fees: &OptionFeeSchedule,
+    candidates: &[VegaHedgeCandidate],
+) -> Option<VegaHedgeSelection> {
+    let mut best: Option<(VegaHedgeSelection, f64)> = None;
+
+    for (i, c) in candidates.iter().enumerate() {
+        if c.vega_per_contract.abs() < 1e-12 {
+            continue;
+        }
+        let hedge_size_contracts = -vega_exposure_coin / c.vega_per_contract;
+        let decision = evaluate(
+            vega_exposure_coin,
+            vol_of_vol,
+            horizon_years,
+            risk_aversion,
+            hedge_size_contracts,
+            c.vega_per_contract,
+            c.half_spread_vol,
+            c.price_coin,
+            contract_size_coin,
+            fees,
+        );
+        if !decision.should_hedge {
+            continue;
+        }
+        let cost_per_vega = decision.hedge_cost_coin / vega_exposure_coin.abs().max(1e-12);
+        let selection = VegaHedgeSelection { candidate_index: i, hedge_size_contracts, decision };
+        if best.as_ref().map_or(true, |(_, c)| cost_per_vega < *c) {
+            best = Some((selection, cost_per_vega));
+        }
+    }
+
+    best.map(|(selection, _)| selection)
+}
+
 pub fn evaluate(
     vega_exposure_coin: f64,
     vol_of_vol: f64,
@@ -124,4 +193,53 @@ mod tests {
         assert!(!decision.should_hedge);
         assert_eq!(decision.carry_cost_coin, 0.0);
     }
-}
+
+    #[test]
+    fn selects_the_cheaper_of_two_candidates_that_both_clear_the_bar() {
+        let cheap = VegaHedgeCandidate {
+            option_type: OptionType::Call,
+            strike: 65000.0,
+            price_coin: 0.05,
+            vega_per_contract: 0.02,
+            half_spread_vol: 0.01, // tight spread, cheap to cross
+        };
+        let expensive = VegaHedgeCandidate {
+            option_type: OptionType::Call,
+            strike: 90000.0,
+            price_coin: 0.01,
+            vega_per_contract: 0.005, // needs way more contracts for the same vega
+            half_spread_vol: 0.08,    // wide spread, expensive to cross
+        };
+
+        let selection = select_vega_hedge(50.0, 1.2, 30.0 / 365.0, 0.05, 1.0, &fees(), &[expensive, cheap]).unwrap();
+        assert_eq!(selection.candidate_index, 1, "should pick the cheap candidate at index 1, not the expensive one at index 0");
+    }
+
+    #[test]
+    fn hedge_size_sign_offsets_the_vega_exposure() {
+        let candidate =
+            VegaHedgeCandidate { option_type: OptionType::Call, strike: 65000.0, price_coin: 0.05, vega_per_contract: 0.02, half_spread_vol: 0.01 };
+        let selection = select_vega_hedge(50.0, 1.2, 30.0 / 365.0, 0.05, 1.0, &fees(), &[candidate]).unwrap();
+        let residual = 50.0 + selection.hedge_size_contracts * candidate.vega_per_contract;
+        assert!(residual.abs() < 1e-9, "residual={residual}");
+    }
+
+    #[test]
+    fn skips_candidates_with_negligible_vega() {
+        let dead = VegaHedgeCandidate { option_type: OptionType::Call, strike: 65000.0, price_coin: 0.05, vega_per_contract: 0.0, half_spread_vol: 0.01 };
+        assert!(select_vega_hedge(50.0, 1.2, 30.0 / 365.0, 0.05, 1.0, &fees(), &[dead]).is_none());
+    }
+
+    #[test]
+    fn returns_none_when_no_candidate_clears_the_bar() {
+        let tiny_exposure_but_wide_spread = VegaHedgeCandidate {
+            option_type: OptionType::Call,
+            strike: 65000.0,
+            price_coin: 0.05,
+            vega_per_contract: 0.02,
+            half_spread_vol: 0.5, // absurdly wide, not worth crossing for this little exposure
+        };
+        let selection = select_vega_hedge(0.3, 1.2, 1.0 / 365.0, 0.05, 1.0, &fees(), &[tiny_exposure_but_wide_spread]);
+        assert!(selection.is_none());
+    }
+}    
