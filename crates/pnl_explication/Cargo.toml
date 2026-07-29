@@ -1,0 +1,9 @@
+[package]
+name = "pnl-explain"
+version = "0.1.0"
+edition = "2021"
+description = "Greeks-based PnL attribution: decomposes realized PnL into delta/gamma/vega/vanna/volga/theta contributions from a Taylor expansion around a starting snapshot, plus whatever's left over as an unexplained residual."
+license = "MIT"
+
+[dependencies]
+book-risk = { path = "../book-risk" }
