@@ -17,13 +17,21 @@ pub struct OptionPosition {
 
 impl OptionPosition {
     pub fn greeks(&self, forward: f64, vol: f64) -> InverseGreeks {
-        let g = greeks(self.instrument.option_type, forward, self.instrument.strike, vol, self.instrument.expiry_years);
+        let g = greeks(
+            self.instrument.option_type,
+            forward,
+            self.instrument.strike,
+            vol,
+            self.instrument.expiry_years,
+        );
         InverseGreeks {
             price_coin: g.price_coin * self.size,
             delta: g.delta * self.size,
             gamma: g.gamma * self.size,
             vega: g.vega * self.size,
             theta: g.theta * self.size,
+            vanna: g.vanna * self.size,
+            volga: g.volga * self.size,
         }
     }
 }
@@ -34,9 +42,19 @@ mod tests {
 
     #[test]
     fn short_position_flips_the_sign_of_long_greeks() {
-        let instrument = OptionKey { option_type: OptionType::Call, strike: 65000.0, expiry_years: 14.0 / 365.0 };
-        let long = OptionPosition { instrument, size: 1.0 };
-        let short = OptionPosition { instrument, size: -1.0 };
+        let instrument = OptionKey {
+            option_type: OptionType::Call,
+            strike: 65000.0,
+            expiry_years: 14.0 / 365.0,
+        };
+        let long = OptionPosition {
+            instrument,
+            size: 1.0,
+        };
+        let short = OptionPosition {
+            instrument,
+            size: -1.0,
+        };
 
         let (forward, vol) = (65000.0, 0.6);
         let long_g = long.greeks(forward, vol);
@@ -48,9 +66,19 @@ mod tests {
 
     #[test]
     fn double_size_doubles_greeks() {
-        let instrument = OptionKey { option_type: OptionType::Put, strike: 60000.0, expiry_years: 30.0 / 365.0 };
-        let one = OptionPosition { instrument, size: 1.0 };
-        let two = OptionPosition { instrument, size: 2.0 };
+        let instrument = OptionKey {
+            option_type: OptionType::Put,
+            strike: 60000.0,
+            expiry_years: 30.0 / 365.0,
+        };
+        let one = OptionPosition {
+            instrument,
+            size: 1.0,
+        };
+        let two = OptionPosition {
+            instrument,
+            size: 2.0,
+        };
 
         let (forward, vol) = (65000.0, 0.65);
         let g1 = one.greeks(forward, vol);
