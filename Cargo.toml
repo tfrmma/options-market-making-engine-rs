@@ -1,3 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/vol-surface", "crates/book-risk", "crates/quoting-engine", "crates/hedge-orchestrator"]
+members = [
+    "crates/vol-surface",
+    "crates/book-risk",
+    "crates/quoting-engine",
+    "crates/hedge-orchestrator",
+    "crates/pnl_explication",
+    "crates/integration_tests",
+]
