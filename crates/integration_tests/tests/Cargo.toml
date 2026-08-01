@@ -1,0 +1,15 @@
+[package]
+name = "integration-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "End-to-end tests that cross all five crates: surface -> risk -> quote -> hedge -> attribution. Not a library anyone should depend on."
+
+[dependencies]
+
+[dev-dependencies]
+vol-surface = { path = "../vol-surface" }
+book-risk = { path = "../book-risk" }
+quoting-engine = { path = "../quoting-engine" }
+hedge-orchestrator = { path = "../hedge-orchestrator" }
+pnl-explain = { path = "../pnl_explication" }
