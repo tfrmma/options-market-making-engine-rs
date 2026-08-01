@@ -23,7 +23,10 @@ pub struct CalibrationConfig {
 
 impl Default for CalibrationConfig {
     fn default() -> Self {
-        Self { max_iterations: 2000, tolerance: 1e-10 }
+        Self {
+            max_iterations: 2000,
+            tolerance: 1e-10,
+        }
     }
 }
 
@@ -34,11 +37,23 @@ pub struct CalibrationError;
 // feasible region by construction instead of rejecting/clamping points,
 // which tends to collapse the simplex near the boundary.
 fn to_constrained(x: &[f64; 5]) -> RawSviParams {
-    RawSviParams { a: x[0], b: x[1].exp(), rho: x[2].tanh(), m: x[3], sigma: x[4].exp() }
+    RawSviParams {
+        a: x[0],
+        b: x[1].exp(),
+        rho: x[2].tanh(),
+        m: x[3],
+        sigma: x[4].exp(),
+    }
 }
 
 fn from_constrained(p: &RawSviParams) -> [f64; 5] {
-    [p.a, p.b.max(1e-8).ln(), p.rho.clamp(-0.999, 0.999).atanh(), p.m, p.sigma.max(1e-8).ln()]
+    [
+        p.a,
+        p.b.max(1e-8).ln(),
+        p.rho.clamp(-0.999, 0.999).atanh(),
+        p.m,
+        p.sigma.max(1e-8).ln(),
+    ]
 }
 
 fn objective(x: &[f64; 5], quotes: &[VarianceQuote]) -> f64 {
@@ -128,8 +143,8 @@ pub fn calibrate_slice(
             } else {
                 let best = simplex[0];
                 for i in 1..simplex.len() {
-                    for d in 0..5 {
-                        simplex[i][d] = best[d] + 0.5 * (simplex[i][d] - best[d]);
+                    for (b, s) in best.iter().zip(simplex[i].iter_mut()) {
+                        *s = b + 0.5 * (*s - b);
                     }
                     scores[i] = objective(&simplex[i], quotes);
                 }
@@ -137,7 +152,9 @@ pub fn calibrate_slice(
         }
     }
 
-    let best_idx = (0..simplex.len()).min_by(|&a, &b| scores[a].partial_cmp(&scores[b]).unwrap()).unwrap();
+    let best_idx = (0..simplex.len())
+        .min_by(|&a, &b| scores[a].partial_cmp(&scores[b]).unwrap())
+        .unwrap();
     let params = to_constrained(&simplex[best_idx]);
     params.validate_static().map_err(|_| CalibrationError)?;
     Ok(params)
@@ -146,7 +163,9 @@ pub fn calibrate_slice(
 // Cheap deterministic jitter, not cryptographic quality, just needs to scatter
 // starting points across the space reproducibly (no rand dependency for this).
 fn jitter(seed: u64, scale: f64) -> f64 {
-    let mut x = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    let mut x = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     x ^= x >> 33;
     x = x.wrapping_mul(0xff51afd7ed558ccd);
     x ^= x >> 33;
@@ -166,7 +185,13 @@ impl Default for PerturbationScale {
     // magnitudes this crate used before they were exposed as config, tuned by
     // feel against the synthetic-smile tests, not calibrated against real data
     fn default() -> Self {
-        Self { a: 0.6, b: 0.6, rho: 0.4, m: 0.3, sigma: 0.6 }
+        Self {
+            a: 0.6,
+            b: 0.6,
+            rho: 0.4,
+            m: 0.3,
+            sigma: 0.6,
+        }
     }
 }
 
@@ -182,7 +207,13 @@ fn perturb(base: RawSviParams, seed: u64, scale: &PerturbationScale) -> RawSviPa
 
 // fallback multi-start anchor when there's no better reason to prefer any
 // other one, a modest crypto-typical ATM smile, not a universal default
-pub const CRYPTO_GENERIC_ANCHOR: RawSviParams = RawSviParams { a: 0.04, b: 0.2, rho: -0.3, m: 0.0, sigma: 0.4 };
+pub const CRYPTO_GENERIC_ANCHOR: RawSviParams = RawSviParams {
+    a: 0.04,
+    b: 0.2,
+    rho: -0.3,
+    m: 0.0,
+    sigma: 0.4,
+};
 
 /// Multi-start version of calibrate_slice: runs from the caller's guess,
 /// `generic_anchor` (hedges against a systematically bad guess, not just a
@@ -204,7 +235,11 @@ pub fn calibrate_slice_robust(
     let mut best: Option<(f64, RawSviParams)> = None;
     for start_idx in 0..n_starts.max(1) {
         let base = bases[start_idx % bases.len()];
-        let guess = if start_idx < bases.len() { base } else { perturb(base, start_idx as u64, &perturbation_scale) };
+        let guess = if start_idx < bases.len() {
+            base
+        } else {
+            perturb(base, start_idx as u64, &perturbation_scale)
+        };
         if let Ok(params) = calibrate_slice(quotes, guess, config) {
             let score = objective(&from_constrained(&params), quotes);
             if best.as_ref().map_or(true, |(s, _)| score < *s) {
@@ -222,15 +257,31 @@ mod tests {
 
     #[test]
     fn recovers_known_svi_params_from_synthetic_smile() {
-        let true_params = RawSviParams { a: 0.02, b: 0.2, rho: -0.3, m: 0.0, sigma: 0.15 };
+        let true_params = RawSviParams {
+            a: 0.02,
+            b: 0.2,
+            rho: -0.3,
+            m: 0.0,
+            sigma: 0.15,
+        };
         let strikes_k = [-0.6, -0.4, -0.2, -0.1, 0.0, 0.1, 0.2, 0.4, 0.6];
         let quotes: Vec<VarianceQuote> = strikes_k
             .iter()
-            .map(|&k| VarianceQuote { log_moneyness: k, total_variance: true_params.total_variance(k), weight: 1.0 })
+            .map(|&k| VarianceQuote {
+                log_moneyness: k,
+                total_variance: true_params.total_variance(k),
+                weight: 1.0,
+            })
             .collect();
 
         // deliberately bad starting guess, proves the search actually converges
-        let bad_guess = RawSviParams { a: 0.05, b: 0.1, rho: 0.0, m: 0.05, sigma: 0.3 };
+        let bad_guess = RawSviParams {
+            a: 0.05,
+            b: 0.1,
+            rho: 0.0,
+            m: 0.05,
+            sigma: 0.3,
+        };
         let fitted = calibrate_slice(&quotes, bad_guess, CalibrationConfig::default()).unwrap();
 
         for &k in &strikes_k {
@@ -241,22 +292,56 @@ mod tests {
 
     #[test]
     fn rejects_too_few_quotes() {
-        let quotes = vec![VarianceQuote { log_moneyness: 0.0, total_variance: 0.02, weight: 1.0 }];
-        let guess = RawSviParams { a: 0.02, b: 0.2, rho: 0.0, m: 0.0, sigma: 0.15 };
+        let quotes = vec![VarianceQuote {
+            log_moneyness: 0.0,
+            total_variance: 0.02,
+            weight: 1.0,
+        }];
+        let guess = RawSviParams {
+            a: 0.02,
+            b: 0.2,
+            rho: 0.0,
+            m: 0.0,
+            sigma: 0.15,
+        };
         assert!(calibrate_slice(&quotes, guess, CalibrationConfig::default()).is_err());
     }
 
     #[test]
     fn robust_calibration_matches_single_start_on_an_easy_problem() {
-        let true_params = RawSviParams { a: 0.02, b: 0.2, rho: -0.3, m: 0.0, sigma: 0.15 };
+        let true_params = RawSviParams {
+            a: 0.02,
+            b: 0.2,
+            rho: -0.3,
+            m: 0.0,
+            sigma: 0.15,
+        };
         let strikes_k = [-0.6, -0.4, -0.2, -0.1, 0.0, 0.1, 0.2, 0.4, 0.6];
         let quotes: Vec<VarianceQuote> = strikes_k
             .iter()
-            .map(|&k| VarianceQuote { log_moneyness: k, total_variance: true_params.total_variance(k), weight: 1.0 })
+            .map(|&k| VarianceQuote {
+                log_moneyness: k,
+                total_variance: true_params.total_variance(k),
+                weight: 1.0,
+            })
             .collect();
 
-        let decent_guess = RawSviParams { a: 0.03, b: 0.15, rho: -0.2, m: 0.0, sigma: 0.2 };
-        let fitted = calibrate_slice_robust(&quotes, decent_guess, CalibrationConfig::default(), 6, CRYPTO_GENERIC_ANCHOR, PerturbationScale::default()).unwrap();
+        let decent_guess = RawSviParams {
+            a: 0.03,
+            b: 0.15,
+            rho: -0.2,
+            m: 0.0,
+            sigma: 0.2,
+        };
+        let fitted = calibrate_slice_robust(
+            &quotes,
+            decent_guess,
+            CalibrationConfig::default(),
+            6,
+            CRYPTO_GENERIC_ANCHOR,
+            PerturbationScale::default(),
+        )
+        .unwrap();
         for &k in &strikes_k {
             assert!((fitted.total_variance(k) - true_params.total_variance(k)).abs() < 1e-4);
         }
@@ -266,54 +351,128 @@ mod tests {
     fn robust_calibration_beats_single_start_on_a_bad_guess() {
         // asymmetric, strongly-skewed target smile, single-start from a bad
         // enough guess should land noticeably worse than multi-start on this
-        let true_params = RawSviParams { a: 0.015, b: 0.35, rho: -0.75, m: 0.15, sigma: 0.08 };
+        let true_params = RawSviParams {
+            a: 0.015,
+            b: 0.35,
+            rho: -0.75,
+            m: 0.15,
+            sigma: 0.08,
+        };
         let strikes_k = [-0.6, -0.4, -0.2, -0.05, 0.0, 0.05, 0.1, 0.2, 0.4];
         let quotes: Vec<VarianceQuote> = strikes_k
             .iter()
-            .map(|&k| VarianceQuote { log_moneyness: k, total_variance: true_params.total_variance(k), weight: 1.0 })
+            .map(|&k| VarianceQuote {
+                log_moneyness: k,
+                total_variance: true_params.total_variance(k),
+                weight: 1.0,
+            })
             .collect();
 
         // deliberately far off: wrong skew sign, wrong smile location, wide curvature
-        let bad_guess = RawSviParams { a: 0.08, b: 0.02, rho: 0.6, m: -0.5, sigma: 0.9 };
+        let bad_guess = RawSviParams {
+            a: 0.08,
+            b: 0.02,
+            rho: 0.6,
+            m: -0.5,
+            sigma: 0.9,
+        };
 
         let single = calibrate_slice(&quotes, bad_guess, CalibrationConfig::default());
-        let robust = calibrate_slice_robust(&quotes, bad_guess, CalibrationConfig::default(), 8, CRYPTO_GENERIC_ANCHOR, PerturbationScale::default()).unwrap();
+        let robust = calibrate_slice_robust(
+            &quotes,
+            bad_guess,
+            CalibrationConfig::default(),
+            8,
+            CRYPTO_GENERIC_ANCHOR,
+            PerturbationScale::default(),
+        )
+        .unwrap();
 
-        let robust_sse: f64 = strikes_k.iter().map(|&k| (robust.total_variance(k) - true_params.total_variance(k)).powi(2)).sum();
+        let robust_sse: f64 = strikes_k
+            .iter()
+            .map(|&k| (robust.total_variance(k) - true_params.total_variance(k)).powi(2))
+            .sum();
 
-        match single {
-            Ok(params) => {
-                let single_sse: f64 = strikes_k.iter().map(|&k| (params.total_variance(k) - true_params.total_variance(k)).powi(2)).sum();
-                assert!(robust_sse <= single_sse, "robust_sse={robust_sse} single_sse={single_sse}");
-            }
-            Err(_) => {} // single-start failing validate_static entirely also counts as robust winning
+        // single-start failing validate_static entirely also counts as robust winning
+        if let Ok(params) = single {
+            let single_sse: f64 = strikes_k
+                .iter()
+                .map(|&k| (params.total_variance(k) - true_params.total_variance(k)).powi(2))
+                .sum();
+            assert!(
+                robust_sse <= single_sse,
+                "robust_sse={robust_sse} single_sse={single_sse}"
+            );
         }
-        assert!(robust_sse < 1e-4, "robust fit should still be good, robust_sse={robust_sse}");
+        assert!(
+            robust_sse < 1e-4,
+            "robust fit should still be good, robust_sse={robust_sse}"
+        );
     }
 
     #[test]
     fn robust_calibration_fails_cleanly_when_every_start_fails() {
-        let quotes = vec![VarianceQuote { log_moneyness: 0.0, total_variance: 0.02, weight: 1.0 }]; // too few points
-        let guess = RawSviParams { a: 0.02, b: 0.2, rho: 0.0, m: 0.0, sigma: 0.15 };
-        assert!(calibrate_slice_robust(&quotes, guess, CalibrationConfig::default(), 4, CRYPTO_GENERIC_ANCHOR, PerturbationScale::default()).is_err());
+        let quotes = vec![VarianceQuote {
+            log_moneyness: 0.0,
+            total_variance: 0.02,
+            weight: 1.0,
+        }]; // too few points
+        let guess = RawSviParams {
+            a: 0.02,
+            b: 0.2,
+            rho: 0.0,
+            m: 0.0,
+            sigma: 0.15,
+        };
+        assert!(calibrate_slice_robust(
+            &quotes,
+            guess,
+            CalibrationConfig::default(),
+            4,
+            CRYPTO_GENERIC_ANCHOR,
+            PerturbationScale::default()
+        )
+        .is_err());
     }
 
     #[test]
     fn warm_start_from_previous_slice_converges_faster_than_cold_start() {
         // not a strict perf test, just checks warm start lands in fewer iterations
         // by capping max_iterations low and confirming it still converges
-        let true_params = RawSviParams { a: 0.021, b: 0.19, rho: -0.31, m: 0.005, sigma: 0.14 };
+        let true_params = RawSviParams {
+            a: 0.021,
+            b: 0.19,
+            rho: -0.31,
+            m: 0.005,
+            sigma: 0.14,
+        };
         let strikes_k = [-0.5, -0.3, -0.1, 0.0, 0.1, 0.3, 0.5];
         let quotes: Vec<VarianceQuote> = strikes_k
             .iter()
-            .map(|&k| VarianceQuote { log_moneyness: k, total_variance: true_params.total_variance(k), weight: 1.0 })
+            .map(|&k| VarianceQuote {
+                log_moneyness: k,
+                total_variance: true_params.total_variance(k),
+                weight: 1.0,
+            })
             .collect();
 
-        let warm_start = RawSviParams { a: 0.02, b: 0.2, rho: -0.3, m: 0.0, sigma: 0.15 };
-        let tight_config = CalibrationConfig { max_iterations: 300, tolerance: 1e-10 };
+        let warm_start = RawSviParams {
+            a: 0.02,
+            b: 0.2,
+            rho: -0.3,
+            m: 0.0,
+            sigma: 0.15,
+        };
+        let tight_config = CalibrationConfig {
+            max_iterations: 300,
+            tolerance: 1e-10,
+        };
         let fitted = calibrate_slice(&quotes, warm_start, tight_config).unwrap();
 
         let diff = (fitted.total_variance(0.0) - true_params.total_variance(0.0)).abs();
-        assert!(diff < 1e-4, "warm start should converge in 300 iters, diff={diff}");
+        assert!(
+            diff < 1e-4,
+            "warm start should converge in 300 iters, diff={diff}"
+        );
     }
 }
