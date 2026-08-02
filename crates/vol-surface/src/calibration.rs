@@ -242,7 +242,7 @@ pub fn calibrate_slice_robust(
         };
         if let Ok(params) = calibrate_slice(quotes, guess, config) {
             let score = objective(&from_constrained(&params), quotes);
-            if best.as_ref().map_or(true, |(s, _)| score < *s) {
+            if best.as_ref().is_none_or(|(s, _)| score < *s) {
                 best = Some((score, params));
             }
         }
