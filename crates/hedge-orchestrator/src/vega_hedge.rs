@@ -45,9 +45,16 @@ fn carry_cost(p: &VegaCarryParams) -> f64 {
     p.risk_aversion * (p.vega_exposure_coin * p.vol_of_vol).powi(2) * p.horizon_years
 }
 
-fn hedge_cost(hedge_size_contracts: f64, candidate: &VegaHedgeCandidate, contract_size_coin: f64, fees: &OptionFeeSchedule) -> f64 {
-    let spread_cost = hedge_size_contracts.abs() * candidate.vega_per_contract.abs() * candidate.half_spread_vol;
-    let fee_cost = hedge_size_contracts.abs() * fees.fee_coin(contract_size_coin, candidate.price_coin);
+fn hedge_cost(
+    hedge_size_contracts: f64,
+    candidate: &VegaHedgeCandidate,
+    contract_size_coin: f64,
+    fees: &OptionFeeSchedule,
+) -> f64 {
+    let spread_cost =
+        hedge_size_contracts.abs() * candidate.vega_per_contract.abs() * candidate.half_spread_vol;
+    let fee_cost =
+        hedge_size_contracts.abs() * fees.fee_coin(contract_size_coin, candidate.price_coin);
     spread_cost + fee_cost
 }
 
@@ -85,7 +92,12 @@ pub fn select_vega_hedge(
     fees: &OptionFeeSchedule,
     candidates: &[VegaHedgeCandidate],
 ) -> Option<VegaHedgeSelection> {
-    let carry = VegaCarryParams { vega_exposure_coin, vol_of_vol, horizon_years, risk_aversion };
+    let carry = VegaCarryParams {
+        vega_exposure_coin,
+        vol_of_vol,
+        horizon_years,
+        risk_aversion,
+    };
     let mut best: Option<(VegaHedgeSelection, f64)> = None;
 
     for (i, c) in candidates.iter().enumerate() {
@@ -98,8 +110,12 @@ pub fn select_vega_hedge(
             continue;
         }
         let cost_per_vega = decision.hedge_cost_coin / vega_exposure_coin.abs().max(1e-12);
-        let selection = VegaHedgeSelection { candidate_index: i, hedge_size_contracts, decision };
-        if best.as_ref().map_or(true, |(_, c)| cost_per_vega < *c) {
+        let selection = VegaHedgeSelection {
+            candidate_index: i,
+            hedge_size_contracts,
+            decision,
+        };
+        if best.as_ref().is_none_or(|(_, c)| cost_per_vega < *c) {
             best = Some((selection, cost_per_vega));
         }
     }
@@ -116,7 +132,11 @@ pub fn evaluate(
 ) -> VegaHedgeDecision {
     let carry_cost_coin = carry_cost(carry);
     let hedge_cost_coin = hedge_cost(hedge_size_contracts, candidate, contract_size_coin, fees);
-    VegaHedgeDecision { carry_cost_coin, hedge_cost_coin, should_hedge: carry_cost_coin > hedge_cost_coin }
+    VegaHedgeDecision {
+        carry_cost_coin,
+        hedge_cost_coin,
+        should_hedge: carry_cost_coin > hedge_cost_coin,
+    }
 }
 
 #[cfg(test)]
@@ -124,7 +144,10 @@ mod tests {
     use super::*;
 
     fn fees() -> OptionFeeSchedule {
-        OptionFeeSchedule { rate_of_underlying: 0.0004, cap_fraction_of_premium: 0.125 }
+        OptionFeeSchedule {
+            rate_of_underlying: 0.0004,
+            cap_fraction_of_premium: 0.125,
+        }
     }
 
     #[test]
@@ -143,27 +166,65 @@ mod tests {
 
     #[test]
     fn large_naked_vega_over_a_long_horizon_is_worth_hedging() {
-        let carry = VegaCarryParams { vega_exposure_coin: 50.0, vol_of_vol: 1.2, horizon_years: 30.0 / 365.0, risk_aversion: 0.05 };
-        let candidate =
-            VegaHedgeCandidate { option_type: OptionType::Call, strike: 65000.0, price_coin: 0.05, vega_per_contract: 0.02, half_spread_vol: 0.05 };
+        let carry = VegaCarryParams {
+            vega_exposure_coin: 50.0,
+            vol_of_vol: 1.2,
+            horizon_years: 30.0 / 365.0,
+            risk_aversion: 0.05,
+        };
+        let candidate = VegaHedgeCandidate {
+            option_type: OptionType::Call,
+            strike: 65000.0,
+            price_coin: 0.05,
+            vega_per_contract: 0.02,
+            half_spread_vol: 0.05,
+        };
         let decision = evaluate(&carry, 5.0, &candidate, 1.0, &fees());
-        assert!(decision.should_hedge, "carry={} hedge={}", decision.carry_cost_coin, decision.hedge_cost_coin);
+        assert!(
+            decision.should_hedge,
+            "carry={} hedge={}",
+            decision.carry_cost_coin, decision.hedge_cost_coin
+        );
     }
 
     #[test]
     fn tiny_vega_over_a_short_horizon_is_not_worth_hedging() {
-        let carry = VegaCarryParams { vega_exposure_coin: 0.5, vol_of_vol: 1.2, horizon_years: 1.0 / 365.0, risk_aversion: 0.05 };
-        let candidate =
-            VegaHedgeCandidate { option_type: OptionType::Call, strike: 65000.0, price_coin: 0.05, vega_per_contract: 0.02, half_spread_vol: 0.05 };
+        let carry = VegaCarryParams {
+            vega_exposure_coin: 0.5,
+            vol_of_vol: 1.2,
+            horizon_years: 1.0 / 365.0,
+            risk_aversion: 0.05,
+        };
+        let candidate = VegaHedgeCandidate {
+            option_type: OptionType::Call,
+            strike: 65000.0,
+            price_coin: 0.05,
+            vega_per_contract: 0.02,
+            half_spread_vol: 0.05,
+        };
         let decision = evaluate(&carry, 5.0, &candidate, 1.0, &fees());
-        assert!(!decision.should_hedge, "carry={} hedge={}", decision.carry_cost_coin, decision.hedge_cost_coin);
+        assert!(
+            !decision.should_hedge,
+            "carry={} hedge={}",
+            decision.carry_cost_coin, decision.hedge_cost_coin
+        );
     }
 
     #[test]
     fn zero_vega_exposure_never_clears_the_hedge_cost() {
-        let carry = VegaCarryParams { vega_exposure_coin: 0.0, vol_of_vol: 1.2, horizon_years: 30.0 / 365.0, risk_aversion: 0.05 };
-        let candidate =
-            VegaHedgeCandidate { option_type: OptionType::Call, strike: 65000.0, price_coin: 0.05, vega_per_contract: 0.02, half_spread_vol: 0.05 };
+        let carry = VegaCarryParams {
+            vega_exposure_coin: 0.0,
+            vol_of_vol: 1.2,
+            horizon_years: 30.0 / 365.0,
+            risk_aversion: 0.05,
+        };
+        let candidate = VegaHedgeCandidate {
+            option_type: OptionType::Call,
+            strike: 65000.0,
+            price_coin: 0.05,
+            vega_per_contract: 0.02,
+            half_spread_vol: 0.05,
+        };
         let decision = evaluate(&carry, 5.0, &candidate, 1.0, &fees());
         assert!(!decision.should_hedge);
         assert_eq!(decision.carry_cost_coin, 0.0);
@@ -186,22 +247,46 @@ mod tests {
             half_spread_vol: 0.08,    // wide spread, expensive to cross
         };
 
-        let selection = select_vega_hedge(50.0, 1.2, 30.0 / 365.0, 0.05, 1.0, &fees(), &[expensive, cheap]).unwrap();
-        assert_eq!(selection.candidate_index, 1, "should pick the cheap candidate at index 1, not the expensive one at index 0");
+        let selection = select_vega_hedge(
+            50.0,
+            1.2,
+            30.0 / 365.0,
+            0.05,
+            1.0,
+            &fees(),
+            &[expensive, cheap],
+        )
+        .unwrap();
+        assert_eq!(
+            selection.candidate_index, 1,
+            "should pick the cheap candidate at index 1, not the expensive one at index 0"
+        );
     }
 
     #[test]
     fn hedge_size_sign_offsets_the_vega_exposure() {
-        let candidate =
-            VegaHedgeCandidate { option_type: OptionType::Call, strike: 65000.0, price_coin: 0.05, vega_per_contract: 0.02, half_spread_vol: 0.01 };
-        let selection = select_vega_hedge(50.0, 1.2, 30.0 / 365.0, 0.05, 1.0, &fees(), &[candidate]).unwrap();
+        let candidate = VegaHedgeCandidate {
+            option_type: OptionType::Call,
+            strike: 65000.0,
+            price_coin: 0.05,
+            vega_per_contract: 0.02,
+            half_spread_vol: 0.01,
+        };
+        let selection =
+            select_vega_hedge(50.0, 1.2, 30.0 / 365.0, 0.05, 1.0, &fees(), &[candidate]).unwrap();
         let residual = 50.0 + selection.hedge_size_contracts * candidate.vega_per_contract;
         assert!(residual.abs() < 1e-9, "residual={residual}");
     }
 
     #[test]
     fn skips_candidates_with_negligible_vega() {
-        let dead = VegaHedgeCandidate { option_type: OptionType::Call, strike: 65000.0, price_coin: 0.05, vega_per_contract: 0.0, half_spread_vol: 0.01 };
+        let dead = VegaHedgeCandidate {
+            option_type: OptionType::Call,
+            strike: 65000.0,
+            price_coin: 0.05,
+            vega_per_contract: 0.0,
+            half_spread_vol: 0.01,
+        };
         assert!(select_vega_hedge(50.0, 1.2, 30.0 / 365.0, 0.05, 1.0, &fees(), &[dead]).is_none());
     }
 
@@ -214,7 +299,15 @@ mod tests {
             vega_per_contract: 0.02,
             half_spread_vol: 0.5, // absurdly wide, not worth crossing for this little exposure
         };
-        let selection = select_vega_hedge(0.3, 1.2, 1.0 / 365.0, 0.05, 1.0, &fees(), &[tiny_exposure_but_wide_spread]);
+        let selection = select_vega_hedge(
+            0.3,
+            1.2,
+            1.0 / 365.0,
+            0.05,
+            1.0,
+            &fees(),
+            &[tiny_exposure_but_wide_spread],
+        );
         assert!(selection.is_none());
     }
 }
