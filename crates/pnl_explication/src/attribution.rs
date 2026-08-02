@@ -53,9 +53,27 @@ impl AddAssign for Attribution {
 /// Attributes one position's PnL between two snapshots. `size` is signed
 /// coins, same convention as book_risk::OptionPosition, multiplies straight
 /// through every term.
-pub fn attribute_position(option_type: OptionType, strike: f64, start: MarketSnapshot, end: MarketSnapshot, size: f64) -> Attribution {
-    let g = compute_greeks(option_type, start.forward, strike, start.vol, start.expiry_years);
-    let start_price = price_coin(option_type, start.forward, strike, start.vol, start.expiry_years);
+pub fn attribute_position(
+    option_type: OptionType,
+    strike: f64,
+    start: MarketSnapshot,
+    end: MarketSnapshot,
+    size: f64,
+) -> Attribution {
+    let g = compute_greeks(
+        option_type,
+        start.forward,
+        strike,
+        start.vol,
+        start.expiry_years,
+    );
+    let start_price = price_coin(
+        option_type,
+        start.forward,
+        strike,
+        start.vol,
+        start.expiry_years,
+    );
     let end_price = price_coin(option_type, end.forward, strike, end.vol, end.expiry_years);
 
     let d_forward = end.forward - start.forward;
@@ -111,13 +129,21 @@ mod tests {
     use super::*;
 
     fn base_snapshot() -> MarketSnapshot {
-        MarketSnapshot { forward: 65000.0, vol: 0.6, expiry_years: 30.0 / 365.0 }
+        MarketSnapshot {
+            forward: 65000.0,
+            vol: 0.6,
+            expiry_years: 30.0 / 365.0,
+        }
     }
 
     #[test]
     fn explained_plus_unexplained_always_equals_realized() {
         let start = base_snapshot();
-        let end = MarketSnapshot { forward: 67000.0, vol: 0.55, expiry_years: 25.0 / 365.0 };
+        let end = MarketSnapshot {
+            forward: 67000.0,
+            vol: 0.55,
+            expiry_years: 25.0 / 365.0,
+        };
         let a = attribute_position(OptionType::Call, 65000.0, start, end, 3.0);
         assert!((a.explained_pnl + a.unexplained_pnl - a.realized_pnl).abs() < 1e-12);
     }
@@ -127,31 +153,55 @@ mod tests {
         // second order in (F, vol), so halving the move should shrink the
         // residual by roughly 1/8, well under the 1/2 a first-order scheme would give
         let start = base_snapshot();
-        let big_end = MarketSnapshot { forward: 66000.0, vol: 0.62, expiry_years: start.expiry_years };
-        let small_end = MarketSnapshot { forward: 65500.0, vol: 0.61, expiry_years: start.expiry_years };
+        let big_end = MarketSnapshot {
+            forward: 66000.0,
+            vol: 0.62,
+            expiry_years: start.expiry_years,
+        };
+        let small_end = MarketSnapshot {
+            forward: 65500.0,
+            vol: 0.61,
+            expiry_years: start.expiry_years,
+        };
 
         let big = attribute_position(OptionType::Call, 65000.0, start, big_end, 1.0);
         let small = attribute_position(OptionType::Call, 65000.0, start, small_end, 1.0);
 
         let ratio = small.unexplained_pnl.abs() / big.unexplained_pnl.abs();
-        assert!(ratio < 0.5, "halving the move should shrink the residual by much more than half, ratio={ratio}");
+        assert!(
+            ratio < 0.5,
+            "halving the move should shrink the residual by much more than half, ratio={ratio}"
+        );
     }
 
     #[test]
     fn pure_time_decay_is_explained_almost_entirely_by_theta() {
         let start = base_snapshot();
-        let end = MarketSnapshot { forward: start.forward, vol: start.vol, expiry_years: start.expiry_years - 1.0 / 365.0 };
+        let end = MarketSnapshot {
+            forward: start.forward,
+            vol: start.vol,
+            expiry_years: start.expiry_years - 1.0 / 365.0,
+        };
         let a = attribute_position(OptionType::Call, 65000.0, start, end, 1.0);
         assert_eq!(a.delta_pnl, 0.0);
         assert_eq!(a.gamma_pnl, 0.0);
         assert_eq!(a.vega_pnl, 0.0);
-        assert!((a.theta_pnl - a.realized_pnl).abs() / a.realized_pnl.abs() < 0.05, "theta_pnl={} realized_pnl={}", a.theta_pnl, a.realized_pnl);
+        assert!(
+            (a.theta_pnl - a.realized_pnl).abs() / a.realized_pnl.abs() < 0.05,
+            "theta_pnl={} realized_pnl={}",
+            a.theta_pnl,
+            a.realized_pnl
+        );
     }
 
     #[test]
     fn short_position_flips_the_sign_of_realized_pnl() {
         let start = base_snapshot();
-        let end = MarketSnapshot { forward: 67000.0, vol: 0.6, expiry_years: start.expiry_years };
+        let end = MarketSnapshot {
+            forward: 67000.0,
+            vol: 0.6,
+            expiry_years: start.expiry_years,
+        };
         let long = attribute_position(OptionType::Call, 65000.0, start, end, 1.0);
         let short = attribute_position(OptionType::Call, 65000.0, start, end, -1.0);
         assert!((long.realized_pnl + short.realized_pnl).abs() < 1e-12);
@@ -160,11 +210,27 @@ mod tests {
     #[test]
     fn book_attribution_matches_the_sum_of_individual_positions() {
         let start = base_snapshot();
-        let end = MarketSnapshot { forward: 66500.0, vol: 0.58, expiry_years: 20.0 / 365.0 };
+        let end = MarketSnapshot {
+            forward: 66500.0,
+            vol: 0.58,
+            expiry_years: 20.0 / 365.0,
+        };
 
         let moves = vec![
-            PositionMove { option_type: OptionType::Call, strike: 65000.0, size: 2.0, start, end },
-            PositionMove { option_type: OptionType::Put, strike: 60000.0, size: -1.5, start, end },
+            PositionMove {
+                option_type: OptionType::Call,
+                strike: 65000.0,
+                size: 2.0,
+                start,
+                end,
+            },
+            PositionMove {
+                option_type: OptionType::Put,
+                strike: 60000.0,
+                size: -1.5,
+                start,
+                end,
+            },
         ];
 
         let book_total = attribute_book(&moves);

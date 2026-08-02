@@ -25,11 +25,22 @@ impl TickSchedule {
     // production should pull the live schedule off get_instrument, Deribit
     // has changed this before.
     pub fn deribit_btc_option_default() -> Self {
-        Self { base_tick_size: 0.0001, steps: vec![TickStep { above_price: 0.005, tick_size: 0.0005 }] }
+        Self {
+            base_tick_size: 0.0001,
+            steps: vec![TickStep {
+                above_price: 0.005,
+                tick_size: 0.0005,
+            }],
+        }
     }
 
     pub fn tick_for(&self, price: f64) -> f64 {
-        self.steps.iter().rev().find(|s| price > s.above_price).map(|s| s.tick_size).unwrap_or(self.base_tick_size)
+        self.steps
+            .iter()
+            .rev()
+            .find(|s| price > s.above_price)
+            .map(|s| s.tick_size)
+            .unwrap_or(self.base_tick_size)
     }
 
     pub fn round_down(&self, price: f64) -> f64 {

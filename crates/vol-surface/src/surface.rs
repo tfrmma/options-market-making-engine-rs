@@ -13,7 +13,10 @@ pub struct Slice {
 pub enum SurfaceError {
     EmptySurface,
     UnsortedExpiries,
-    CalendarArbitrage { expiry_short: usize, expiry_long: usize },
+    CalendarArbitrage {
+        expiry_short: usize,
+        expiry_long: usize,
+    },
     SliceInvalid(SviValidationError),
 }
 
@@ -34,15 +37,24 @@ impl VolSurface {
     /// scanned over the same k-grid), then checks that total variance is
     /// non-decreasing in T at every grid point between every consecutive
     /// pair of expiries (Gatheral & Jacquier 2014, sec. 4).
-    pub fn build_with_grid(mut slices: Vec<Slice>, k_grid_min: f64, k_grid_max: f64, k_grid_n: usize) -> Result<Self, SurfaceError> {
+    pub fn build_with_grid(
+        mut slices: Vec<Slice>,
+        k_grid_min: f64,
+        k_grid_max: f64,
+        k_grid_n: usize,
+    ) -> Result<Self, SurfaceError> {
         if slices.is_empty() {
             return Err(SurfaceError::EmptySurface);
         }
         slices.sort_by(|a, b| a.expiry_years.partial_cmp(&b.expiry_years).unwrap());
 
         for (i, s) in slices.iter().enumerate() {
-            s.params.validate_static().map_err(SurfaceError::SliceInvalid)?;
-            s.params.check_butterfly_arbitrage(k_grid_min, k_grid_max, k_grid_n).map_err(SurfaceError::SliceInvalid)?;
+            s.params
+                .validate_static()
+                .map_err(SurfaceError::SliceInvalid)?;
+            s.params
+                .check_butterfly_arbitrage(k_grid_min, k_grid_max, k_grid_n)
+                .map_err(SurfaceError::SliceInvalid)?;
             if i > 0 && slices[i - 1].expiry_years >= s.expiry_years {
                 return Err(SurfaceError::UnsortedExpiries);
             }
@@ -55,7 +67,10 @@ impl VolSurface {
                 let w_short = slices[i - 1].params.total_variance(k);
                 let w_long = slices[i].params.total_variance(k);
                 if w_long < w_short - 1e-9 {
-                    return Err(SurfaceError::CalendarArbitrage { expiry_short: i - 1, expiry_long: i });
+                    return Err(SurfaceError::CalendarArbitrage {
+                        expiry_short: i - 1,
+                        expiry_long: i,
+                    });
                 }
             }
         }
@@ -103,12 +118,22 @@ mod tests {
     use crate::svi::RawSviParams;
 
     fn slice(expiry: f64, a: f64) -> Slice {
-        Slice { expiry_years: expiry, params: RawSviParams { a, b: 0.15, rho: -0.3, m: 0.0, sigma: 0.15 } }
+        Slice {
+            expiry_years: expiry,
+            params: RawSviParams {
+                a,
+                b: 0.15,
+                rho: -0.3,
+                m: 0.0,
+                sigma: 0.15,
+            },
+        }
     }
 
     #[test]
     fn interpolated_variance_matches_endpoints_exactly() {
-        let s = VolSurface::build(vec![slice(7.0 / 365.0, 0.01), slice(30.0 / 365.0, 0.03)]).unwrap();
+        let s =
+            VolSurface::build(vec![slice(7.0 / 365.0, 0.01), slice(30.0 / 365.0, 0.03)]).unwrap();
         let w_short = s.total_variance(0.0, 7.0 / 365.0);
         let w_long = s.total_variance(0.0, 30.0 / 365.0);
         assert!((w_short - s.slices()[0].params.total_variance(0.0)).abs() < 1e-12);
@@ -117,7 +142,8 @@ mod tests {
 
     #[test]
     fn interpolated_midpoint_is_between_the_two_endpoints() {
-        let s = VolSurface::build(vec![slice(7.0 / 365.0, 0.01), slice(30.0 / 365.0, 0.03)]).unwrap();
+        let s =
+            VolSurface::build(vec![slice(7.0 / 365.0, 0.01), slice(30.0 / 365.0, 0.03)]).unwrap();
         let mid_t = (7.0 + 30.0) / 2.0 / 365.0;
         let w_mid = s.total_variance(0.0, mid_t);
         let w_short = s.slices()[0].params.total_variance(0.0);
@@ -128,12 +154,24 @@ mod tests {
     #[test]
     fn detects_calendar_arbitrage_when_later_slice_has_lower_variance() {
         let result = VolSurface::build(vec![slice(7.0 / 365.0, 0.05), slice(30.0 / 365.0, 0.005)]);
-        assert!(matches!(result, Err(SurfaceError::CalendarArbitrage { .. })));
+        assert!(matches!(
+            result,
+            Err(SurfaceError::CalendarArbitrage { .. })
+        ));
     }
 
     #[test]
     fn rejects_invalid_slice_before_checking_calendar_arb() {
-        let bad = Slice { expiry_years: 7.0 / 365.0, params: RawSviParams { a: 0.0, b: -1.0, rho: 0.0, m: 0.0, sigma: 0.1 } };
+        let bad = Slice {
+            expiry_years: 7.0 / 365.0,
+            params: RawSviParams {
+                a: 0.0,
+                b: -1.0,
+                rho: 0.0,
+                m: 0.0,
+                sigma: 0.1,
+            },
+        };
         let result = VolSurface::build(vec![bad, slice(30.0 / 365.0, 0.03)]);
         assert!(matches!(result, Err(SurfaceError::SliceInvalid(_))));
     }
@@ -144,24 +182,41 @@ mod tests {
         // build() needs to actually call it, not just have it sitting unused
         let arb_slice = Slice {
             expiry_years: 7.0 / 365.0,
-            params: RawSviParams { a: 0.0001, b: 5.0, rho: 0.0, m: 0.0, sigma: 0.01 },
+            params: RawSviParams {
+                a: 0.0001,
+                b: 5.0,
+                rho: 0.0,
+                m: 0.0,
+                sigma: 0.01,
+            },
         };
         let result = VolSurface::build(vec![arb_slice]);
         assert!(
-            matches!(result, Err(SurfaceError::SliceInvalid(SviValidationError::ButterflyArbitrage))),
+            matches!(
+                result,
+                Err(SurfaceError::SliceInvalid(
+                    SviValidationError::ButterflyArbitrage
+                ))
+            ),
             "expected ButterflyArbitrage, got {result:?}"
         );
     }
 
     #[test]
     fn custom_grid_can_be_narrower_than_the_default() {
-        let s = VolSurface::build_with_grid(vec![slice(7.0 / 365.0, 0.01), slice(30.0 / 365.0, 0.03)], -0.5, 0.5, 21);
+        let s = VolSurface::build_with_grid(
+            vec![slice(7.0 / 365.0, 0.01), slice(30.0 / 365.0, 0.03)],
+            -0.5,
+            0.5,
+            21,
+        );
         assert!(s.is_ok());
     }
 
     #[test]
     fn flat_extrapolates_beyond_listed_tenors() {
-        let s = VolSurface::build(vec![slice(7.0 / 365.0, 0.01), slice(30.0 / 365.0, 0.03)]).unwrap();
+        let s =
+            VolSurface::build(vec![slice(7.0 / 365.0, 0.01), slice(30.0 / 365.0, 0.03)]).unwrap();
         let w_far = s.total_variance(0.0, 365.0 / 365.0);
         let w_last = s.slices()[1].params.total_variance(0.0);
         assert!((w_far - w_last).abs() < 1e-12);
@@ -169,12 +224,16 @@ mod tests {
 
     #[test]
     fn empty_surface_is_rejected() {
-        assert_eq!(VolSurface::build(vec![]).unwrap_err(), SurfaceError::EmptySurface);
+        assert_eq!(
+            VolSurface::build(vec![]).unwrap_err(),
+            SurfaceError::EmptySurface
+        );
     }
 
     #[test]
     fn implied_vol_is_zero_at_and_past_expiry_instead_of_blowing_up() {
-        let s = VolSurface::build(vec![slice(7.0 / 365.0, 0.01), slice(30.0 / 365.0, 0.03)]).unwrap();
+        let s =
+            VolSurface::build(vec![slice(7.0 / 365.0, 0.01), slice(30.0 / 365.0, 0.03)]).unwrap();
         assert_eq!(s.implied_vol(0.0, 0.0), 0.0);
         assert_eq!(s.implied_vol(0.0, -1.0), 0.0);
         assert!(s.implied_vol(0.0, 0.0).is_finite());
@@ -182,7 +241,8 @@ mod tests {
 
     #[test]
     fn implied_vol_stays_finite_for_a_very_small_positive_t() {
-        let s = VolSurface::build(vec![slice(7.0 / 365.0, 0.01), slice(30.0 / 365.0, 0.03)]).unwrap();
+        let s =
+            VolSurface::build(vec![slice(7.0 / 365.0, 0.01), slice(30.0 / 365.0, 0.03)]).unwrap();
         let v = s.implied_vol(0.0, 1e-9);
         assert!(v.is_finite() && v >= 0.0, "v={v}");
     }

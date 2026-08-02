@@ -34,13 +34,18 @@ pub fn dollar_gamma(book_gamma_coin: f64, forward: f64) -> f64 {
 }
 
 pub fn half_width_dollar_delta(dollar_gamma: f64, forward: f64, params: &BandParams) -> f64 {
-    let inner = 3.0 * params.transaction_cost_rate * dollar_gamma * dollar_gamma * forward / (2.0 * params.risk_aversion);
+    let inner = 3.0 * params.transaction_cost_rate * dollar_gamma * dollar_gamma * forward
+        / (2.0 * params.risk_aversion);
     inner.cbrt()
 }
 
 // WW's policy is "do nothing inside the band, trade only to the nearest edge when outside it",
 // not "hedge straight back to target". None means already inside the band.
-pub fn rehedge_target(current_dollar_delta: f64, target_dollar_delta: f64, half_width: f64) -> Option<f64> {
+pub fn rehedge_target(
+    current_dollar_delta: f64,
+    target_dollar_delta: f64,
+    half_width: f64,
+) -> Option<f64> {
     let deviation = current_dollar_delta - target_dollar_delta;
     if deviation.abs() <= half_width {
         None
@@ -56,7 +61,10 @@ mod tests {
     use super::*;
 
     fn params() -> BandParams {
-        BandParams { transaction_cost_rate: 0.0005, risk_aversion: 1e-8 }
+        BandParams {
+            transaction_cost_rate: 0.0005,
+            risk_aversion: 1e-8,
+        }
     }
 
     #[test]
@@ -71,9 +79,26 @@ mod tests {
     fn band_narrows_with_higher_risk_aversion() {
         let forward = 65000.0;
         let gamma = 0.05;
-        let relaxed = half_width_dollar_delta(gamma, forward, &BandParams { risk_aversion: 1e-9, ..params() });
-        let averse = half_width_dollar_delta(gamma, forward, &BandParams { risk_aversion: 1e-7, ..params() });
-        assert!(averse < relaxed, "more risk-averse should tolerate a narrower band");
+        let relaxed = half_width_dollar_delta(
+            gamma,
+            forward,
+            &BandParams {
+                risk_aversion: 1e-9,
+                ..params()
+            },
+        );
+        let averse = half_width_dollar_delta(
+            gamma,
+            forward,
+            &BandParams {
+                risk_aversion: 1e-7,
+                ..params()
+            },
+        );
+        assert!(
+            averse < relaxed,
+            "more risk-averse should tolerate a narrower band"
+        );
     }
 
     #[test]

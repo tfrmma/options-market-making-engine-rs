@@ -13,7 +13,13 @@ pub fn norm_pdf(x: f64) -> f64 {
 // Abramowitz-Stegun rational approx, ~7.5e-8 accurate. Fine for IV
 // inversion, wouldn't trust it for tail risk numbers.
 pub fn norm_cdf(x: f64) -> f64 {
-    let (b1, b2, b3, b4, b5) = (0.319381530, -0.356563782, 1.781477937, -1.821255978, 1.330274429);
+    let (b1, b2, b3, b4, b5) = (
+        0.319381530,
+        -0.356563782,
+        1.781477937,
+        -1.821255978,
+        1.330274429,
+    );
     let p = 0.2316419;
     let c = 0.39894228;
 
@@ -56,12 +62,22 @@ pub struct VolBounds {
 impl VolBounds {
     // the range this solver used to have hardcoded, named explicitly now
     // instead of buried as magic numbers, still crypto-specific, not universal
-    pub const CRYPTO_DEFAULT: VolBounds = VolBounds { lower: 1e-4, upper: 5.0 };
+    pub const CRYPTO_DEFAULT: VolBounds = VolBounds {
+        lower: 1e-4,
+        upper: 5.0,
+    };
 }
 
 // Newton with a bisection fallback for the cases Newton doesn't like: deep
 // OTM, near expiry, vega near zero.
-pub fn implied_vol_black76(price: f64, forward: f64, strike: f64, t: f64, initial_guess: f64, bounds: VolBounds) -> Result<f64, IvSolverError> {
+pub fn implied_vol_black76(
+    price: f64,
+    forward: f64,
+    strike: f64,
+    t: f64,
+    initial_guess: f64,
+    bounds: VolBounds,
+) -> Result<f64, IvSolverError> {
     let intrinsic = (forward - strike).max(0.0);
     if price < intrinsic - 1e-10 {
         return Err(IvSolverError);
@@ -106,7 +122,14 @@ pub fn implied_vol_black76(price: f64, forward: f64, strike: f64, t: f64, initia
 
 /// Converts a quoted price into the (log-moneyness, total-variance) point
 /// calibrate_slice expects.
-pub fn quote_to_variance_point(price: f64, forward: f64, strike: f64, t: f64, iv_guess: f64, bounds: VolBounds) -> Result<(f64, f64), IvSolverError> {
+pub fn quote_to_variance_point(
+    price: f64,
+    forward: f64,
+    strike: f64,
+    t: f64,
+    iv_guess: f64,
+    bounds: VolBounds,
+) -> Result<(f64, f64), IvSolverError> {
     let vol = implied_vol_black76(price, forward, strike, t, iv_guess, bounds)?;
     let k = (strike / forward).ln();
     Ok((k, vol * vol * t))
@@ -123,7 +146,8 @@ mod tests {
         let t = 30.0 / 365.0;
         let true_vol = 0.62;
         let price = black76_call(forward, strike, true_vol, t);
-        let recovered = implied_vol_black76(price, forward, strike, t, 0.5, VolBounds::CRYPTO_DEFAULT).unwrap();
+        let recovered =
+            implied_vol_black76(price, forward, strike, t, 0.5, VolBounds::CRYPTO_DEFAULT).unwrap();
         assert!((recovered - true_vol).abs() < 1e-4);
     }
 
@@ -134,14 +158,22 @@ mod tests {
         let t = 3.0 / 365.0;
         let true_vol = 0.9;
         let price = black76_call(forward, strike, true_vol, t);
-        let recovered = implied_vol_black76(price, forward, strike, t, 0.5, VolBounds::CRYPTO_DEFAULT).unwrap();
+        let recovered =
+            implied_vol_black76(price, forward, strike, t, 0.5, VolBounds::CRYPTO_DEFAULT).unwrap();
         assert!((recovered - true_vol).abs() < 5e-3);
     }
 
     #[test]
     fn price_below_intrinsic_is_rejected() {
         // forward 65000, strike 60000: intrinsic is 5000, quoting 100 is nonsense
-        let result = implied_vol_black76(100.0, 65000.0, 60000.0, 30.0 / 365.0, 0.5, VolBounds::CRYPTO_DEFAULT);
+        let result = implied_vol_black76(
+            100.0,
+            65000.0,
+            60000.0,
+            30.0 / 365.0,
+            0.5,
+            VolBounds::CRYPTO_DEFAULT,
+        );
         assert_eq!(result, Err(IvSolverError));
     }
 
@@ -152,7 +184,9 @@ mod tests {
         let t = 14.0 / 365.0;
         let true_vol = 0.55;
         let price = black76_call(forward, strike, true_vol, t);
-        let (k, w) = quote_to_variance_point(price, forward, strike, t, 0.5, VolBounds::CRYPTO_DEFAULT).unwrap();
+        let (k, w) =
+            quote_to_variance_point(price, forward, strike, t, 0.5, VolBounds::CRYPTO_DEFAULT)
+                .unwrap();
         assert!((k - (strike / forward).ln()).abs() < 1e-12);
         assert!((w - true_vol * true_vol * t).abs() < 1e-6);
     }
@@ -165,9 +199,15 @@ mod tests {
         let strike = 65000.0;
         let t = 14.0 / 365.0;
         let price = black76_call(forward, strike, 0.9, t);
-        let narrow = VolBounds { lower: 0.1, upper: 0.3 };
+        let narrow = VolBounds {
+            lower: 0.1,
+            upper: 0.3,
+        };
         let recovered = implied_vol_black76(price, forward, strike, t, 0.2, narrow).unwrap();
-        assert!(recovered <= narrow.upper + 1e-9, "recovered={recovered} should stay within the configured bound");
+        assert!(
+            recovered <= narrow.upper + 1e-9,
+            "recovered={recovered} should stay within the configured bound"
+        );
     }
 
     #[test]
@@ -182,12 +222,22 @@ mod tests {
         let extreme_vol = 7.0; // above VolBounds::CRYPTO_DEFAULT.upper
         let price = black76_call(forward, strike, extreme_vol, t);
 
-        let wide = VolBounds { lower: 1e-4, upper: 15.0 };
+        let wide = VolBounds {
+            lower: 1e-4,
+            upper: 15.0,
+        };
         let recovered_wide = implied_vol_black76(price, forward, strike, t, 1.0, wide).unwrap();
-        assert!((recovered_wide - extreme_vol).abs() < 1e-2, "recovered={recovered_wide}");
+        assert!(
+            (recovered_wide - extreme_vol).abs() < 1e-2,
+            "recovered={recovered_wide}"
+        );
 
-        let recovered_default = implied_vol_black76(price, forward, strike, t, 1.0, VolBounds::CRYPTO_DEFAULT).unwrap();
+        let recovered_default =
+            implied_vol_black76(price, forward, strike, t, 1.0, VolBounds::CRYPTO_DEFAULT).unwrap();
         assert!(recovered_default <= VolBounds::CRYPTO_DEFAULT.upper + 1e-9);
-        assert!(recovered_default < recovered_wide, "default bound should clamp well below the true vol");
+        assert!(
+            recovered_default < recovered_wide,
+            "default bound should clamp well below the true vol"
+        );
     }
 }

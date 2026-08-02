@@ -19,7 +19,11 @@ pub fn half_spread_vol(p: &SpreadParams) -> f64 {
 }
 
 // toxicity score is external, VPIN/Kyle's lambda lives in game-theory-trading-strats
-pub fn widen_for_toxicity(half_spread: f64, toxicity_score: f64, toxicity_widen_factor: f64) -> f64 {
+pub fn widen_for_toxicity(
+    half_spread: f64,
+    toxicity_score: f64,
+    toxicity_widen_factor: f64,
+) -> f64 {
     half_spread * (1.0 + toxicity_widen_factor * toxicity_score.clamp(0.0, 1.0))
 }
 
@@ -28,7 +32,12 @@ mod tests {
     use super::*;
 
     fn base_params() -> SpreadParams {
-        SpreadParams { risk_aversion: 0.3, vol_of_vol: 1.2, horizon_years: 1.0 / 365.0, kappa: 8.0 }
+        SpreadParams {
+            risk_aversion: 0.3,
+            vol_of_vol: 1.2,
+            horizon_years: 1.0 / 365.0,
+            kappa: 8.0,
+        }
     }
 
     #[test]
@@ -38,15 +47,27 @@ mod tests {
 
     #[test]
     fn longer_horizon_widens_the_spread() {
-        let short = SpreadParams { horizon_years: 1.0 / 365.0, ..base_params() };
-        let long = SpreadParams { horizon_years: 10.0 / 365.0, ..base_params() };
+        let short = SpreadParams {
+            horizon_years: 1.0 / 365.0,
+            ..base_params()
+        };
+        let long = SpreadParams {
+            horizon_years: 10.0 / 365.0,
+            ..base_params()
+        };
         assert!(half_spread_vol(&long) > half_spread_vol(&short));
     }
 
     #[test]
     fn higher_vol_of_vol_widens_the_spread() {
-        let calm = SpreadParams { vol_of_vol: 0.5, ..base_params() };
-        let choppy = SpreadParams { vol_of_vol: 2.0, ..base_params() };
+        let calm = SpreadParams {
+            vol_of_vol: 0.5,
+            ..base_params()
+        };
+        let choppy = SpreadParams {
+            vol_of_vol: 2.0,
+            ..base_params()
+        };
         assert!(half_spread_vol(&choppy) > half_spread_vol(&calm));
     }
 

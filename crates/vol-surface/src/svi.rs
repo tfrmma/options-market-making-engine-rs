@@ -114,7 +114,13 @@ mod tests {
 
     fn sample_params() -> RawSviParams {
         // Roughly BTC-shaped short-dated smile: modest left skew, modest curvature.
-        RawSviParams { a: 0.02, b: 0.18, rho: -0.35, m: 0.0, sigma: 0.15 }
+        RawSviParams {
+            a: 0.02,
+            b: 0.18,
+            rho: -0.35,
+            m: 0.0,
+            sigma: 0.15,
+        }
     }
 
     #[test]
@@ -124,25 +130,43 @@ mod tests {
 
     #[test]
     fn validate_static_rejects_negative_b() {
-        let p = RawSviParams { b: -0.1, ..sample_params() };
+        let p = RawSviParams {
+            b: -0.1,
+            ..sample_params()
+        };
         assert_eq!(p.validate_static(), Err(SviValidationError::NegativeB));
     }
 
     #[test]
     fn validate_static_rejects_rho_out_of_bounds() {
-        let p = RawSviParams { rho: 1.2, ..sample_params() };
+        let p = RawSviParams {
+            rho: 1.2,
+            ..sample_params()
+        };
         assert_eq!(p.validate_static(), Err(SviValidationError::RhoOutOfBounds));
     }
 
     #[test]
     fn validate_static_rejects_negative_min_variance() {
-        let p = RawSviParams { a: -1.0, b: 0.1, rho: 0.0, m: 0.0, sigma: 0.1 };
-        assert_eq!(p.validate_static(), Err(SviValidationError::NegativeMinVariance));
+        let p = RawSviParams {
+            a: -1.0,
+            b: 0.1,
+            rho: 0.0,
+            m: 0.0,
+            sigma: 0.1,
+        };
+        assert_eq!(
+            p.validate_static(),
+            Err(SviValidationError::NegativeMinVariance)
+        );
     }
 
     #[test]
     fn total_variance_is_symmetric_at_atm_when_rho_zero() {
-        let p = RawSviParams { rho: 0.0, ..sample_params() };
+        let p = RawSviParams {
+            rho: 0.0,
+            ..sample_params()
+        };
         let w_up = p.total_variance(0.1);
         let w_down = p.total_variance(-0.1);
         assert!((w_up - w_down).abs() < 1e-12);
@@ -166,7 +190,13 @@ mod tests {
     #[test]
     fn extreme_curvature_triggers_butterfly_arbitrage_flag() {
         // b large relative to sigma forces curvature that violates g(k) >= 0.
-        let p = RawSviParams { a: 0.0001, b: 5.0, rho: 0.0, m: 0.0, sigma: 0.01 };
+        let p = RawSviParams {
+            a: 0.0001,
+            b: 5.0,
+            rho: 0.0,
+            m: 0.0,
+            sigma: 0.01,
+        };
         assert!(p.check_butterfly_arbitrage(-1.0, 1.0, 400).is_err());
     }
 }

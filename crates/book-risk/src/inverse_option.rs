@@ -100,11 +100,20 @@ pub fn price_coin(option_type: OptionType, forward: f64, strike: f64, vol: f64, 
 /// the standard textbook Black-Scholes volga identity structurally (Haug's
 /// formula collection has the same vega*d1*d2/sigma form), a useful
 /// external check beyond just the finite-difference tests below.
-pub fn greeks(option_type: OptionType, forward: f64, strike: f64, vol: f64, t: f64) -> InverseGreeks {
+pub fn greeks(
+    option_type: OptionType,
+    forward: f64,
+    strike: f64,
+    vol: f64,
+    t: f64,
+) -> InverseGreeks {
     let price_coin_now = price_coin(option_type, forward, strike, vol, t);
 
     if t <= 0.0 || vol <= 0.0 {
-        return InverseGreeks { price_coin: price_coin_now, ..Default::default() };
+        return InverseGreeks {
+            price_coin: price_coin_now,
+            ..Default::default()
+        };
     }
 
     let (d1, d2) = d1_d2(forward, strike, vol, t);
@@ -129,7 +138,15 @@ pub fn greeks(option_type: OptionType, forward: f64, strike: f64, vol: f64, t: f
     let vanna = -k_over_f2 * norm_pdf(d2) * d1 / vol;
     let volga = vega * d1 * d2 / vol;
 
-    InverseGreeks { price_coin: price_coin_now, delta, gamma, vega, theta, vanna, volga }
+    InverseGreeks {
+        price_coin: price_coin_now,
+        delta,
+        gamma,
+        vega,
+        theta,
+        vanna,
+        volga,
+    }
 }
 
 #[cfg(test)]
@@ -167,14 +184,26 @@ mod tests {
 
     // vanna two independent ways: d(delta)/dvol and d(vega)/dF, both should
     // land on the same number if the closed form is right
-    fn fd_vanna_via_delta(option_type: OptionType, forward: f64, strike: f64, vol: f64, t: f64) -> f64 {
+    fn fd_vanna_via_delta(
+        option_type: OptionType,
+        forward: f64,
+        strike: f64,
+        vol: f64,
+        t: f64,
+    ) -> f64 {
         let eps = 1e-6;
         let up = greeks(option_type, forward, strike, vol + eps, t).delta;
         let down = greeks(option_type, forward, strike, vol - eps, t).delta;
         (up - down) / (2.0 * eps)
     }
 
-    fn fd_vanna_via_vega(option_type: OptionType, forward: f64, strike: f64, vol: f64, t: f64) -> f64 {
+    fn fd_vanna_via_vega(
+        option_type: OptionType,
+        forward: f64,
+        strike: f64,
+        vol: f64,
+        t: f64,
+    ) -> f64 {
         let eps = forward * 1e-6;
         let up = greeks(option_type, forward + eps, strike, vol, t).vega;
         let down = greeks(option_type, forward - eps, strike, vol, t).vega;
@@ -194,7 +223,10 @@ mod tests {
         let call = price_coin(OptionType::Call, forward, strike, vol, t);
         let put = price_coin(OptionType::Put, forward, strike, vol, t);
         let expected = 1.0 - strike / forward;
-        assert!((call - put - expected).abs() < 1e-12, "call={call} put={put} expected={expected}");
+        assert!(
+            (call - put - expected).abs() < 1e-12,
+            "call={call} put={put} expected={expected}"
+        );
     }
 
     #[test]
@@ -205,7 +237,10 @@ mod tests {
                 let analytic = greeks(option_type, forward, strike, vol, t).delta;
                 let fd = fd_delta(option_type, forward, strike, vol, t);
                 let rel_diff = (analytic - fd).abs() / fd.abs().max(1e-12);
-                assert!(rel_diff < 1e-4, "{option_type:?} F={forward} K={strike} analytic={analytic} fd={fd}");
+                assert!(
+                    rel_diff < 1e-4,
+                    "{option_type:?} F={forward} K={strike} analytic={analytic} fd={fd}"
+                );
             }
         }
     }
@@ -218,7 +253,10 @@ mod tests {
                 let analytic = greeks(option_type, forward, strike, vol, t).gamma;
                 let fd = fd_gamma(option_type, forward, strike, vol, t);
                 let rel_diff = (analytic - fd).abs() / fd.abs().max(1e-12);
-                assert!(rel_diff < 1e-2, "{option_type:?} F={forward} K={strike} analytic={analytic} fd={fd}");
+                assert!(
+                    rel_diff < 1e-2,
+                    "{option_type:?} F={forward} K={strike} analytic={analytic} fd={fd}"
+                );
             }
         }
     }
@@ -230,7 +268,10 @@ mod tests {
             let analytic = greeks(option_type, forward, strike, vol, t).vega;
             let fd = fd_vega(option_type, forward, strike, vol, t);
             let rel_diff = (analytic - fd).abs() / fd.abs().max(1e-12);
-            assert!(rel_diff < 1e-4, "{option_type:?} analytic={analytic} fd={fd}");
+            assert!(
+                rel_diff < 1e-4,
+                "{option_type:?} analytic={analytic} fd={fd}"
+            );
         }
     }
 
@@ -240,7 +281,10 @@ mod tests {
         // direct/USD-settled option's delta would.
         let forward = 65000.0;
         let d = greeks(OptionType::Call, forward, forward, 0.6, 30.0 / 365.0).delta;
-        assert!(d > 0.0 && d < 1.0 / forward, "coin delta {d} should be well under 1/F");
+        assert!(
+            d > 0.0 && d < 1.0 / forward,
+            "coin delta {d} should be well under 1/F"
+        );
     }
 
     #[test]
@@ -250,14 +294,20 @@ mod tests {
             let analytic = greeks(option_type, forward, strike, vol, t).theta;
             let fd = fd_theta(option_type, forward, strike, vol, t);
             let rel_diff = (analytic - fd).abs() / fd.abs().max(1e-12);
-            assert!(rel_diff < 1e-4, "{option_type:?} analytic={analytic} fd={fd}");
+            assert!(
+                rel_diff < 1e-4,
+                "{option_type:?} analytic={analytic} fd={fd}"
+            );
         }
     }
 
     #[test]
     fn theta_is_negative_for_a_long_option() {
         let theta = greeks(OptionType::Call, 65000.0, 65000.0, 0.6, 14.0 / 365.0).theta;
-        assert!(theta < 0.0, "long option should decay in value as T shrinks, got {theta}");
+        assert!(
+            theta < 0.0,
+            "long option should decay in value as T shrinks, got {theta}"
+        );
     }
 
     #[test]
@@ -276,8 +326,14 @@ mod tests {
             let analytic = greeks(option_type, forward, strike, vol, t).vanna;
             let via_delta = fd_vanna_via_delta(option_type, forward, strike, vol, t);
             let via_vega = fd_vanna_via_vega(option_type, forward, strike, vol, t);
-            assert!((analytic - via_delta).abs() / via_delta.abs().max(1e-12) < 1e-4, "{option_type:?} analytic={analytic} via_delta={via_delta}");
-            assert!((analytic - via_vega).abs() / via_vega.abs().max(1e-12) < 1e-4, "{option_type:?} analytic={analytic} via_vega={via_vega}");
+            assert!(
+                (analytic - via_delta).abs() / via_delta.abs().max(1e-12) < 1e-4,
+                "{option_type:?} analytic={analytic} via_delta={via_delta}"
+            );
+            assert!(
+                (analytic - via_vega).abs() / via_vega.abs().max(1e-12) < 1e-4,
+                "{option_type:?} analytic={analytic} via_vega={via_vega}"
+            );
         }
     }
 
@@ -288,7 +344,10 @@ mod tests {
             let analytic = greeks(option_type, forward, strike, vol, t).volga;
             let fd = fd_volga(option_type, forward, strike, vol, t);
             let rel_diff = (analytic - fd).abs() / fd.abs().max(1e-12);
-            assert!(rel_diff < 1e-4, "{option_type:?} analytic={analytic} fd={fd}");
+            assert!(
+                rel_diff < 1e-4,
+                "{option_type:?} analytic={analytic} fd={fd}"
+            );
         }
     }
 

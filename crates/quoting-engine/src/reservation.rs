@@ -12,7 +12,12 @@ pub struct RiskAversion {
     pub gamma: f64,
 }
 
-pub fn reservation_vol(mid_vol: f64, bucket_vega: f64, local_gamma: f64, risk_aversion: RiskAversion) -> f64 {
+pub fn reservation_vol(
+    mid_vol: f64,
+    bucket_vega: f64,
+    local_gamma: f64,
+    risk_aversion: RiskAversion,
+) -> f64 {
     (mid_vol - risk_aversion.vega * bucket_vega - risk_aversion.gamma * local_gamma).max(1e-4)
 }
 
@@ -21,7 +26,10 @@ mod tests {
     use super::*;
 
     fn ra() -> RiskAversion {
-        RiskAversion { vega: 0.02, gamma: 0.01 }
+        RiskAversion {
+            vega: 0.02,
+            gamma: 0.01,
+        }
     }
 
     #[test]
@@ -32,13 +40,19 @@ mod tests {
     #[test]
     fn long_vega_pulls_reservation_vol_down() {
         let r = reservation_vol(0.6, 5.0, 0.0, ra());
-        assert!(r < 0.6, "long vega should skew reservation vol down, got {r}");
+        assert!(
+            r < 0.6,
+            "long vega should skew reservation vol down, got {r}"
+        );
     }
 
     #[test]
     fn short_vega_pushes_reservation_vol_up() {
         let r = reservation_vol(0.6, -5.0, 0.0, ra());
-        assert!(r > 0.6, "short vega should skew reservation vol up, got {r}");
+        assert!(
+            r > 0.6,
+            "short vega should skew reservation vol up, got {r}"
+        );
     }
 
     #[test]

@@ -50,33 +50,50 @@ mod tests {
 
     #[test]
     fn coin_delta_per_contract_matches_finite_difference_of_deribits_own_pnl_formula() {
-        let perp = InversePerp { contract_size: 10.0 };
+        let perp = InversePerp {
+            contract_size: 10.0,
+        };
         let forward = 65000.0;
         let analytic = perp.coin_delta_per_contract(forward);
         let fd = fd_coin_delta_per_contract(perp.contract_size, forward);
-        assert!((analytic - fd).abs() / fd < 1e-6, "analytic={analytic} fd={fd}");
+        assert!(
+            (analytic - fd).abs() / fd < 1e-6,
+            "analytic={analytic} fd={fd}"
+        );
     }
 
     #[test]
     fn hedging_a_long_book_requires_a_short_perp_position() {
-        let perp = InversePerp { contract_size: 10.0 };
+        let perp = InversePerp {
+            contract_size: 10.0,
+        };
         let n = perp.hedge_contracts_for_zero_delta(0.5, 65000.0);
-        assert!(n < 0.0, "long book delta should need a short hedge, got {n}");
+        assert!(
+            n < 0.0,
+            "long book delta should need a short hedge, got {n}"
+        );
     }
 
     #[test]
     fn hedge_size_exactly_cancels_book_delta_at_current_price() {
-        let perp = InversePerp { contract_size: 10.0 };
+        let perp = InversePerp {
+            contract_size: 10.0,
+        };
         let forward = 65000.0;
         let book_delta = 0.35;
         let n = perp.hedge_contracts_for_zero_delta(book_delta, forward);
         let hedge_delta = n * perp.coin_delta_per_contract(forward);
-        assert!((book_delta + hedge_delta).abs() < 1e-9, "book + hedge delta should net to zero");
+        assert!(
+            (book_delta + hedge_delta).abs() < 1e-9,
+            "book + hedge delta should net to zero"
+        );
     }
 
     #[test]
     fn zero_book_delta_needs_no_hedge() {
-        let perp = InversePerp { contract_size: 10.0 };
+        let perp = InversePerp {
+            contract_size: 10.0,
+        };
         assert_eq!(perp.hedge_contracts_for_zero_delta(0.0, 65000.0), 0.0);
     }
 }

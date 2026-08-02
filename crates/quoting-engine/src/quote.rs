@@ -56,16 +56,40 @@ pub fn build_quote(req: &QuoteRequest) -> Option<QuoteEntry> {
 
     let bucket = req.book.bucket_near(req.expiry_years);
     let target_k = (req.strike / req.forward).ln();
-    let local_gamma = req.book.local_gamma_near(target_k, req.expiry_years, req.gamma_kernel_bandwidth);
+    let local_gamma =
+        req.book
+            .local_gamma_near(target_k, req.expiry_years, req.gamma_kernel_bandwidth);
     let r_vol = reservation_vol(req.mid_vol, bucket.vega, local_gamma, req.risk_aversion);
-    let half = widen_for_toxicity(half_spread_vol(&req.spread_params), req.toxicity_score, req.toxicity_widen_factor);
+    let half = widen_for_toxicity(
+        half_spread_vol(&req.spread_params),
+        req.toxicity_score,
+        req.toxicity_widen_factor,
+    );
 
     let bid_vol = (r_vol - half).max(1e-4);
     let ask_vol = r_vol + half;
 
-    let bid_price_raw = price_coin(req.option_type, req.forward, req.strike, bid_vol, req.expiry_years);
-    let ask_price_raw = price_coin(req.option_type, req.forward, req.strike, ask_vol, req.expiry_years);
-    let theoretical_price = price_coin(req.option_type, req.forward, req.strike, req.mid_vol, req.expiry_years);
+    let bid_price_raw = price_coin(
+        req.option_type,
+        req.forward,
+        req.strike,
+        bid_vol,
+        req.expiry_years,
+    );
+    let ask_price_raw = price_coin(
+        req.option_type,
+        req.forward,
+        req.strike,
+        ask_vol,
+        req.expiry_years,
+    );
+    let theoretical_price = price_coin(
+        req.option_type,
+        req.forward,
+        req.strike,
+        req.mid_vol,
+        req.expiry_years,
+    );
     let bid_price_raw = sanity_clamp(bid_price_raw, theoretical_price, req.max_price_deviation);
     let ask_price_raw = sanity_clamp(ask_price_raw, theoretical_price, req.max_price_deviation);
 
@@ -77,7 +101,12 @@ pub fn build_quote(req: &QuoteRequest) -> Option<QuoteEntry> {
         ask_price = bid_price + req.tick_schedule.tick_for(bid_price);
     }
 
-    let size = quote_size(req.base_size, bucket.vega, req.max_bucket_vega, req.size_floor_fraction);
+    let size = quote_size(
+        req.base_size,
+        bucket.vega,
+        req.max_bucket_vega,
+        req.size_floor_fraction,
+    );
     if size < req.min_trade_amount {
         return None;
     }
@@ -111,10 +140,22 @@ mod tests {
     use vol_surface::{RawSviParams, Slice, VolSurface};
 
     fn flat_surface() -> VolSurface {
-        let params = RawSviParams { a: 0.04, b: 0.15, rho: -0.3, m: 0.0, sigma: 0.15 };
+        let params = RawSviParams {
+            a: 0.04,
+            b: 0.15,
+            rho: -0.3,
+            m: 0.0,
+            sigma: 0.15,
+        };
         VolSurface::build(vec![
-            Slice { expiry_years: 7.0 / 365.0, params },
-            Slice { expiry_years: 30.0 / 365.0, params },
+            Slice {
+                expiry_years: 7.0 / 365.0,
+                params,
+            },
+            Slice {
+                expiry_years: 30.0 / 365.0,
+                params,
+            },
         ])
         .unwrap()
     }
@@ -127,8 +168,16 @@ mod tests {
             forward: 65000.0,
             mid_vol: 0.6,
             book,
-            risk_aversion: RiskAversion { vega: 0.02, gamma: 0.01 },
-            spread_params: SpreadParams { risk_aversion: 0.3, vol_of_vol: 1.2, horizon_years: 1.0 / 365.0, kappa: 8.0 },
+            risk_aversion: RiskAversion {
+                vega: 0.02,
+                gamma: 0.01,
+            },
+            spread_params: SpreadParams {
+                risk_aversion: 0.3,
+                vol_of_vol: 1.2,
+                horizon_years: 1.0 / 365.0,
+                kappa: 8.0,
+            },
             toxicity_score: 0.0,
             toxicity_widen_factor: 2.0,
             tick_schedule,
@@ -173,15 +222,28 @@ mod tests {
         // a large short-option position (short options = negative vega... use a
         // long position instead to get positive/long vega exposure)
         let surface = flat_surface();
-        let instrument = OptionKey { option_type: OptionType::Call, strike: 65000.0, expiry_years: 14.0 / 365.0 };
-        let positions = vec![OptionPosition { instrument, size: 400.0 }];
+        let instrument = OptionKey {
+            option_type: OptionType::Call,
+            strike: 65000.0,
+            expiry_years: 14.0 / 365.0,
+        };
+        let positions = vec![OptionPosition {
+            instrument,
+            size: 400.0,
+        }];
         let forwards = book_risk::ForwardCurve::new(vec![(14.0 / 365.0, 65000.0)]);
         let loaded_book = aggregate(&positions, &surface, &forwards);
 
         let loaded_quote = build_quote(&base_request(&loaded_book, &tick_schedule)).unwrap();
 
-        assert!(loaded_quote.bid_vol < empty_quote.bid_vol, "long vega book should quote a lower bid vol");
-        assert!(loaded_quote.bid_size < empty_quote.bid_size, "long vega book should throttle size down");
+        assert!(
+            loaded_quote.bid_vol < empty_quote.bid_vol,
+            "long vega book should quote a lower bid vol"
+        );
+        assert!(
+            loaded_quote.bid_size < empty_quote.bid_size,
+            "long vega book should throttle size down"
+        );
     }
 
     #[test]
@@ -209,8 +271,15 @@ mod tests {
     #[test]
     fn size_floor_fraction_actually_changes_the_throttled_size() {
         let surface = flat_surface();
-        let instrument = OptionKey { option_type: OptionType::Call, strike: 65000.0, expiry_years: 14.0 / 365.0 };
-        let positions = vec![OptionPosition { instrument, size: 500.0 }]; // pin bucket vega at full utilization
+        let instrument = OptionKey {
+            option_type: OptionType::Call,
+            strike: 65000.0,
+            expiry_years: 14.0 / 365.0,
+        };
+        let positions = vec![OptionPosition {
+            instrument,
+            size: 500.0,
+        }]; // pin bucket vega at full utilization
         let forwards = book_risk::ForwardCurve::new(vec![(14.0 / 365.0, 65000.0)]);
         let loaded_book = aggregate(&positions, &surface, &forwards);
         let tick_schedule = TickSchedule::deribit_btc_option_default();
@@ -223,7 +292,10 @@ mod tests {
 
         let low = build_quote(&low_floor).unwrap();
         let high = build_quote(&high_floor).unwrap();
-        assert!(high.bid_size > low.bid_size, "higher floor fraction should leave more size at full utilization");
+        assert!(
+            high.bid_size > low.bid_size,
+            "higher floor fraction should leave more size at full utilization"
+        );
     }
 
     #[test]
@@ -232,8 +304,15 @@ mod tests {
         let tick_schedule = TickSchedule::deribit_btc_option_default();
         let expiry = 14.0 / 365.0;
         // big gamma sitting right at 65000, book is flat everywhere else in this bucket
-        let concentrated = OptionKey { option_type: OptionType::Call, strike: 65000.0, expiry_years: expiry };
-        let positions = vec![OptionPosition { instrument: concentrated, size: 300.0 }];
+        let concentrated = OptionKey {
+            option_type: OptionType::Call,
+            strike: 65000.0,
+            expiry_years: expiry,
+        };
+        let positions = vec![OptionPosition {
+            instrument: concentrated,
+            size: 300.0,
+        }];
         let forwards = book_risk::ForwardCurve::new(vec![(expiry, 65000.0)]);
         let book = aggregate(&positions, &surface, &forwards);
 
@@ -247,7 +326,10 @@ mod tests {
 
         let near_skew = (near_quote.bid_vol + near_quote.ask_vol) / 2.0 - near_req.mid_vol;
         let far_skew = (far_quote.bid_vol + far_quote.ask_vol) / 2.0 - far_req.mid_vol;
-        assert!(near_skew.abs() > far_skew.abs(), "near_skew={near_skew} far_skew={far_skew}");
+        assert!(
+            near_skew.abs() > far_skew.abs(),
+            "near_skew={near_skew} far_skew={far_skew}"
+        );
     }
 
     #[test]
@@ -257,10 +339,21 @@ mod tests {
         let mut req = base_request(&book, &tick_schedule);
         // absurdly wide spread params, without the clamp this could quote a
         // price many multiples away from the mid-vol theoretical
-        req.spread_params = SpreadParams { risk_aversion: 5.0, vol_of_vol: 50.0, horizon_years: 5.0, kappa: 0.001 };
+        req.spread_params = SpreadParams {
+            risk_aversion: 5.0,
+            vol_of_vol: 50.0,
+            horizon_years: 5.0,
+            kappa: 0.001,
+        };
         req.max_price_deviation = 0.3;
 
-        let theoretical = book_risk::price_coin(req.option_type, req.forward, req.strike, req.mid_vol, req.expiry_years);
+        let theoretical = book_risk::price_coin(
+            req.option_type,
+            req.forward,
+            req.strike,
+            req.mid_vol,
+            req.expiry_years,
+        );
         let quote = build_quote(&req).unwrap();
         assert!(quote.ask_price <= theoretical * 1.3 + tick_schedule.tick_for(quote.ask_price));
     }
